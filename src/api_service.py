@@ -35,7 +35,6 @@ async def lifespan(app: FastAPI):
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
     
     yield
-    
     # 应用关闭时的清理操作（如果需要的话）
     # 这里可以添加清理代码
 
@@ -58,7 +57,7 @@ app.add_middleware(
 
 @app.middleware("http")
 async def metrics_middleware(request, call_next):
-    """中间件：收集请求指标"""
+    """中间件：在每个 HTTP 请求被处理之前和之后执行，用于收集请求指标"""
     start_time = time.time()
     ACTIVE_REQUESTS.inc()
     
@@ -105,7 +104,6 @@ ACTIVE_REQUESTS = Gauge(
     'Active FastAPI Requests'
 )
 
-# 新增监控指标
 LLM_INTERPRETATION_DURATION = Histogram(
     'llm_interpretation_duration_seconds',
     'LLM Interpretation Duration',
@@ -402,16 +400,10 @@ async def predict(
             # 将提供的特征数据转换为DataFrame
             input_data = pd.DataFrame(request.features)
             
-            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
-            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
-                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
-                print(f"错误: {error_msg}")
-                raise HTTPException(status_code=400, detail=error_msg)
-            
             # 确保所有特征都存在
             missing_features = set(feature_names) - set(input_data.columns)
             if missing_features:
-                error_msg = f"缺少特征: {missing_features}。请确保提供所有17个特征。"
+                error_msg = f"缺少特征: {missing_features}。请确保提供所有特征。"
                 print(f"错误: {error_msg}")
                 raise HTTPException(status_code=400, detail=error_msg)
             
@@ -533,12 +525,6 @@ async def shap_analysis(
             
             # 将提供的特征数据转换为DataFrame
             input_data = pd.DataFrame(request.features)
-            
-            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
-            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
-                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
-                print(f"错误: {error_msg}")
-                raise HTTPException(status_code=400, detail=error_msg)
             
             # 确保所有特征都存在
             missing_features = set(feature_names) - set(input_data.columns)
@@ -723,215 +709,7 @@ def format_shap_for_llm(shap_values, feature_names, input_data):
     
     return formatted_text
 
-@app.post("/shap-with-stats-analysis", response_model=ShapWithStatsResponse)
-async def shap_with_stats_analysis(
-    request: ShapAnalysisRequest = Body(
-        examples={
-            "sample_count_example": {
-                "summary": "使用样本数量",
-                "description": "使用样本数量进行SHAP与统计量分析",
-                "value": {
-                    "sample_count": 3,
-                    "features": None
-                }
-            },
-            "features_example": {
-                "summary": "使用特征数据",
-                "description": "直接提供特征数据进行SHAP与统计量分析",
-                "value": {
-                    "sample_count": 1,
-                    "features": [
-                        {
-                            " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
-                            " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
-                            " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
-                            " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
-                            " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
-                            " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
-                            " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
-                            " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
-                            " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
-                            " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
-                            " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
-                            " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
-                            " Net profit before tax/Paid-in capital": 0.18269361284971,
-                            " Cash/Total Assets": 0.427034273303766,
-                            " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
-                            " Equity to Liability": 0.221255812384907,
-                            " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
-                        }
-                    ]
-                }
-            }
-        }
-    )
-):
-    """
-    SHAP分析与统计量整合端点
-    
-    参数:
-    - request: SHAP分析请求，可以指定样本数量或直接提供特征数据
-    
-    返回:
-    - SHAP解释值、特征名称、基准值、分组统计量和LLM解读
-    """
-    if model is None or explainer is None or test_data is None or train_data is None:
-        raise HTTPException(status_code=500, detail="模型或数据未加载")
-    
-    try:
-        print(f"SHAP与统计量分析请求: sample_count={request.sample_count}, features={request.features is not None}")
-        
-        # 如果直接提供了特征数据
-        if request.features is not None and request.features:
-            print(f"提供的特征数据: {len(request.features)} 条记录")
-            print(f"第一条记录的特征: {list(request.features[0].keys())}")
-            
-            # 将提供的特征数据转换为DataFrame
-            input_data = pd.DataFrame(request.features)
-            
-            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
-            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
-                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
-                print(f"错误: {error_msg}")
-                raise HTTPException(status_code=400, detail=error_msg)
-            
-            # 确保所有特征都存在
-            missing_features = set(feature_names) - set(input_data.columns)
-            if missing_features:
-                error_msg = f"缺少特征: {missing_features}。请确保提供所有17个特征。"
-                print(f"错误: {error_msg}")
-                raise HTTPException(status_code=400, detail=error_msg)
-            
-            # 确保特征顺序正确
-            input_data = input_data[feature_names]
-        else:
-            # 从测试数据中随机抽取样本
-            sample_count = request.sample_count if request.sample_count > 0 else 1
-            sample_count = min(sample_count, len(test_data))
-            
-            # 随机抽取样本
-            sample_indices = random.sample(range(len(test_data)), sample_count)
-            input_data = test_data.iloc[sample_indices, :-1]  # 排除目标变量
-            print(f"随机抽取 {sample_count} 个样本进行SHAP与统计量分析")
-        
-        print(f"输入数据形状: {input_data.shape}")
-        
-        # 计算SHAP值
-        shap_values = explainer.shap_values(input_data)
-        
-        # 获取基准值
-        base_value = explainer.expected_value
-        
-        # 如果模型是多输出的，取第一个输出的基准值
-        if isinstance(base_value, (list, np.ndarray)):
-            base_value = base_value[0]
-        
-        # 将SHAP值转换为列表格式
-        shap_values_list = shap_values.tolist()
-        
-        print(f"SHAP分析完成: 基准值={base_value}, SHAP值形状={np.array(shap_values).shape}")
-        
-        # 按Bankrupt标签分组计算统计量
-        print("计算分组统计量...")
-        bankrupt_0_data = train_data[train_data['Bankrupt'] == 0]
-        bankrupt_1_data = train_data[train_data['Bankrupt'] == 1]
-        
-        stats_bankrupt_0 = calculate_feature_stats(bankrupt_0_data, feature_names)
-        stats_bankrupt_1 = calculate_feature_stats(bankrupt_1_data, feature_names)
-        
-        print(f"分组统计量计算完成: Bankrupt=0有{len(bankrupt_0_data)}条样本, Bankrupt=1有{len(bankrupt_1_data)}条样本")
-        
-        # 获取按SHAP值绝对值排序后的前5个特征
-        top_features = []
-        for i, sample_shap_values in enumerate(shap_values):
-            # 创建特征名、SHAP值和特征值的元组列表
-            feature_shap_value_tuples = []
-            for j, (feature, shap_val) in enumerate(zip(feature_names, sample_shap_values)):
-                feature_val = input_data.iloc[i, j] if hasattr(input_data, 'iloc') else None
-                feature_shap_value_tuples.append((feature, shap_val, feature_val))
-            
-            # 按SHAP值绝对值降序排序
-            feature_shap_value_tuples.sort(key=lambda x: abs(x[1]), reverse=True)
-            
-            # 获取前5个最重要的特征
-            sample_top_features = [feature for feature, _, _ in feature_shap_value_tuples[:5]]
-            top_features.extend(sample_top_features)
-        
-        # 去重并保持顺序
-        seen = set()
-        top_features = [x for x in top_features if not (x in seen or seen.add(x))]
-        
-        # 格式化统计量和SHAP值，准备提交给LLM
-        stats_text = format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features)
-        shap_text = format_shap_for_llm(shap_values, feature_names, input_data)
-        
-        # 构建LLM提示
-        llm_prompt = f"""
-你是一位专业的数据科学家和机器学习专家。请分析以下SHAP值和特征统计量信息，并提供专业且清晰易懂的解读。
 
-{stats_text}
-{shap_text}
-
-请基于以上信息，提供以下分析：
-1. 对于Bankrupt=0和Bankrupt=1两组样本，哪些特征表现出最显著的差异？
-2. 根据SHAP值分析，哪些特征对模型的预测影响最大？是正向影响还是负向影响？
-3. 结合统计量信息和SHAP值，解释这些特征如何影响预测结果。
-4. 对于当前分析的样本，根据SHAP值和统计量对比，给出风险评估和建议。
-
-请提供专业、详细且易于理解的解读。
-"""
-        
-        # 调用Gemini大模型进行解读
-        print("正在调用Gemini大模型进行解读...")
-        llm_manager = create_llm("gemini")
-        
-        # 记录LLM解读操作开始时间
-        llm_start_time = time.time()
-        
-        # 创建一个StringIO对象来捕获流式输出
-        from io import StringIO
-        import sys
-        
-        # 重定向标准输出到StringIO对象
-        old_stdout = sys.stdout
-        sys.stdout = captured_output = StringIO()
-        
-        try:
-            # 调用LLM获取流式响应
-            llm_manager.get_response(
-                llm_prompt,
-                system_prompt="你是一位专业的数据科学家和机器学习专家，擅长解释SHAP值和统计分析结果。"
-            )
-            
-            # 获取捕获的输出
-            llm_interpretation = captured_output.getvalue()
-        finally:
-            # 恢复标准输出
-            sys.stdout = old_stdout
-        
-        # 记录LLM解读操作耗时
-        llm_duration = time.time() - llm_start_time
-        LLM_INTERPRETATION_DURATION.labels(model_type="gemini").observe(llm_duration)
-        
-        print("Gemini大模型解读完成")
-        
-        return ShapWithStatsResponse(
-            shap_values=shap_values_list,
-            feature_names=feature_names,
-            base_value=float(base_value),
-            stats_bankrupt_0=stats_bankrupt_0,
-            stats_bankrupt_1=stats_bankrupt_1,
-            llm_interpretation=llm_interpretation
-        )
-    except HTTPException:
-        # 直接传递HTTP异常
-        raise
-    except Exception as e:
-        error_msg = f"SHAP与统计量分析过程中出错: {str(e)}"
-        print(f"错误: {error_msg}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=error_msg)
 
 @app.websocket("/ws/shap-with-stats-analysis")
 async def websocket_shap_with_stats_analysis(websocket: WebSocket):
@@ -1088,9 +866,6 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
 
 {stats_text}
 {shap_text}
-
-请基于以上信息，提供以下分析：
-1. 对于Bankrupt=0和Bankrupt=1两组样本，哪些特征表现出最显著的差异？
 
 请提供简洁的解读。
 """
