@@ -1,0 +1,941 @@
+"""
+基于FastAPI的机器学习模型预测服务
+"""
+
+import os
+import random
+import pandas as pd
+import numpy as np
+import joblib
+import shap
+import time
+from typing import List, Dict, Any, Optional
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Body, Response
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from fastapi.middleware.cors import CORSMiddleware
+from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+
+# 导入大模型配置
+from .llm_config import create_llm
+
+# 定义生命周期管理器
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """应用生命周期管理器"""
+    # 应用启动时加载模型和数据
+    load_model_and_data()
+    # 挂载静态文件目录
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+    if os.path.exists(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    
+    yield
+    
+    # 应用关闭时的清理操作（如果需要的话）
+    # 这里可以添加清理代码
+
+# 创建FastAPI应用
+app = FastAPI(
+    title="机器学习模型预测服务",
+    description="使用XGBoost模型进行预测并提供SHAP解释的API服务",
+    version="1.0.0",
+    lifespan=lifespan
+)
+
+# 添加CORS中间件，允许前端跨域访问
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+@app.middleware("http")
+async def metrics_middleware(request, call_next):
+    """中间件：收集请求指标"""
+    start_time = time.time()
+    ACTIVE_REQUESTS.inc()
+    
+    response = await call_next(request)
+    
+    # 记录请求指标
+    request_time = time.time() - start_time
+    REQUEST_COUNT.labels(
+        method=request.method,
+        endpoint=request.url.path,
+        http_status=response.status_code
+    ).inc()
+    
+    REQUEST_DURATION.labels(
+        method=request.method,
+        endpoint=request.url.path
+    ).observe(request_time)
+    
+    ACTIVE_REQUESTS.dec()
+    
+    return response
+
+# 定义Prometheus监控指标
+REQUEST_COUNT = Counter(
+    'fastapi_requests_total', 
+    'Total FastAPI Requests', 
+    ['method', 'endpoint', 'http_status']
+)
+
+REQUEST_DURATION = Histogram(
+    'fastapi_request_duration_seconds', 
+    'FastAPI Request Duration',
+    ['method', 'endpoint']
+)
+
+PREDICTION_COUNT = Counter(
+    'model_predictions_total',
+    'Total Model Predictions',
+    ['prediction_result']
+)
+
+ACTIVE_REQUESTS = Gauge(
+    'fastapi_active_requests',
+    'Active FastAPI Requests'
+)
+
+# 新增监控指标
+LLM_INTERPRETATION_DURATION = Histogram(
+    'llm_interpretation_duration_seconds',
+    'LLM Interpretation Duration',
+    ['model_type']
+)
+
+PREDICTION_OPERATION_DURATION = Histogram(
+    'prediction_operation_duration_seconds',
+    'Prediction Operation Duration'
+)
+
+PREDICTION_PROBABILITY_DISTRIBUTION = Counter(
+    'prediction_probability_distribution_total',
+    'Prediction Probability Distribution',
+    ['prediction_class', 'probability_range']
+)
+
+PREDICTION_CLASS_DISTRIBUTION = Counter(
+    'prediction_class_distribution_total',
+    'Prediction Class Distribution',
+    ['prediction_class']
+)
+
+# 定义数据模型
+class PredictionRequest(BaseModel):
+    """请求数据模型"""
+    sample_count: Optional[int] = Field(default=1, example=3)
+    features: Optional[List[Dict[str, float]]] = Field(
+        default=None, 
+        example=[
+            {
+                " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
+                " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
+                " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
+                " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
+                " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
+                " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
+                " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
+                " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
+                " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
+                " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
+                " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
+                " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
+                " Net profit before tax/Paid-in capital": 0.18269361284971,
+                " Cash/Total Assets": 0.427034273303766,
+                " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
+                " Equity to Liability": 0.221255812384907,
+                " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
+            }
+        ]
+    )
+
+class PredictionResponse(BaseModel):
+    """响应数据模型"""
+    predictions: List[int]
+    probabilities: List[float]
+
+class ShapAnalysisRequest(BaseModel):
+    """SHAP分析请求数据模型"""
+    sample_count: Optional[int] = Field(default=1, example=3)
+    features: Optional[List[Dict[str, float]]] = Field(
+        default=None, 
+        example=[
+            {
+                " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
+                " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
+                " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
+                " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
+                " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
+                " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
+                " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
+                " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
+                " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
+                " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
+                " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
+                " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
+                " Net profit before tax/Paid-in capital": 0.18269361284971,
+                " Cash/Total Assets": 0.427034273303766,
+                " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
+                " Equity to Liability": 0.221255812384907,
+                " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
+            }
+        ]
+    )
+
+class ShapAnalysisResponse(BaseModel):
+    """SHAP分析响应数据模型"""
+    shap_values: List[List[float]]
+    feature_names: List[str]
+    base_value: float
+
+class ShapWithStatsResponse(BaseModel):
+    """SHAP分析与统计量整合响应数据模型"""
+    shap_values: List[List[float]]
+    feature_names: List[str]
+    base_value: float
+    stats_bankrupt_0: Dict[str, Dict[str, float]]
+    stats_bankrupt_1: Dict[str, Dict[str, float]]
+    llm_interpretation: str
+
+class HealthResponse(BaseModel):
+    """健康检查响应模型"""
+    status: str
+    message: str
+
+def get_probability_range(probability):
+    """
+    根据概率值确定概率范围
+    
+    参数:
+    - probability: 概率值 (0.0-1.0)
+    
+    返回:
+    - 概率范围字符串
+    """
+    if probability < 0.1:
+        return "0.0-0.1"
+    elif probability < 0.2:
+        return "0.1-0.2"
+    elif probability < 0.3:
+        return "0.2-0.3"
+    elif probability < 0.4:
+        return "0.3-0.4"
+    elif probability < 0.5:
+        return "0.4-0.5"
+    elif probability < 0.6:
+        return "0.5-0.6"
+    elif probability < 0.7:
+        return "0.6-0.7"
+    elif probability < 0.8:
+        return "0.7-0.8"
+    elif probability < 0.9:
+        return "0.8-0.9"
+    else:
+        return "0.9-1.0"
+
+# 全局变量，用于存储模型和解释器
+model = None
+explainer = None
+feature_names = None
+test_data = None
+train_data = None
+
+def load_model_and_data():
+    """加载模型和测试数据"""
+    global model, explainer, feature_names, test_data, train_data
+    
+    try:
+        # 模型文件路径
+        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'xgboost_binned_model.joblib')
+        
+        # 测试数据文件路径
+        test_data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'binned_test_data.csv')
+        
+        # 训练数据文件路径
+        train_data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'binned_train_data.csv')
+        
+        # 检查文件是否存在
+        if not os.path.exists(model_path):
+            print(f"错误: 模型文件不存在: {model_path}")
+            return False
+        if not os.path.exists(test_data_path):
+            print(f"错误: 测试数据文件不存在: {test_data_path}")
+            return False
+        if not os.path.exists(train_data_path):
+            print(f"错误: 训练数据文件不存在: {train_data_path}")
+            return False
+        
+        # 加载模型
+        print("正在加载模型...")
+        model = joblib.load(model_path)
+        print("模型加载成功")
+        
+        # 加载测试数据
+        print("正在加载测试数据...")
+        test_data = pd.read_csv(test_data_path)
+        print(f"测试数据加载成功，共 {len(test_data)} 条记录")
+        
+        # 加载训练数据
+        print("正在加载训练数据...")
+        train_data = pd.read_csv(train_data_path)
+        print(f"训练数据加载成功，共 {len(train_data)} 条记录")
+        
+        # 获取特征名称（除了最后一列是目标变量）
+        feature_names = test_data.columns[:-1].tolist()
+        print(f"特征数量: {len(feature_names)}")
+        
+        # 创建SHAP解释器
+        print("正在创建SHAP解释器...")
+        explainer = shap.TreeExplainer(model)
+        print("SHAP解释器创建成功")
+        
+        # 测试模型预测功能
+        print("测试模型预测功能...")
+        sample_data = test_data.iloc[:1, :-1]
+        prediction = model.predict(sample_data)
+        probability = model.predict_proba(sample_data)
+        print(f"测试预测结果: 类别={prediction[0]}, 概率={probability[0]}")
+        
+        # 测试SHAP计算功能
+        print("测试SHAP计算功能...")
+        shap_values = explainer.shap_values(sample_data)
+        print(f"SHAP值计算成功，形状: {np.array(shap_values).shape}")
+        
+        print("模型和数据加载成功")
+        return True
+    except Exception as e:
+        print(f"加载模型和数据时出错: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+
+@app.get("/")
+async def root():
+    """根路径，返回测试页面"""
+    static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
+    index_path = os.path.join(static_dir, 'index.html')
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return {"message": "机器学习模型预测服务运行中", "docs_url": "/docs"}
+
+@app.get("/health", response_model=HealthResponse)
+async def health_check():
+    """健康检查端点"""
+    if model is None:
+        raise HTTPException(status_code=500, detail="模型未加载")
+    return HealthResponse(status="healthy", message="模型预测服务运行正常")
+
+@app.post("/predict", response_model=PredictionResponse)
+async def predict(
+    request: PredictionRequest = Body(
+        examples={
+            "sample_count_example": {
+                "summary": "使用样本数量",
+                "description": "使用样本数量进行预测",
+                "value": {
+                    "sample_count": 3,
+                    "features": None
+                }
+            },
+            "features_example": {
+                "summary": "使用特征数据",
+                "description": "直接提供特征数据进行预测",
+                "value": {
+                    "sample_count": 1,
+                    "features": [
+                        {
+                            " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
+                            " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
+                            " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
+                            " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
+                            " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
+                            " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
+                            " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
+                            " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
+                            " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
+                            " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
+                            " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
+                            " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
+                            " Net profit before tax/Paid-in capital": 0.18269361284971,
+                            " Cash/Total Assets": 0.427034273303766,
+                            " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
+                            " Equity to Liability": 0.221255812384907,
+                            " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
+                        }
+                    ]
+                }
+            }
+        }
+    )
+):
+    """
+    预测端点
+    
+    参数:
+    - request: 预测请求，可以指定样本数量或直接提供特征数据
+    
+    返回:
+    - 预测结果和概率
+    """
+    if model is None or test_data is None:
+        raise HTTPException(status_code=500, detail="模型或数据未加载")
+    
+    try:
+        print(f"预测请求: sample_count={request.sample_count}, features={request.features is not None}")
+        
+        # 如果直接提供了特征数据
+        if request.features is not None and request.features:
+            print(f"提供的特征数据: {len(request.features)} 条记录")
+            print(f"第一条记录的特征: {list(request.features[0].keys())}")
+            
+            # 将提供的特征数据转换为DataFrame
+            input_data = pd.DataFrame(request.features)
+            
+            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
+            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
+                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保所有特征都存在
+            missing_features = set(feature_names) - set(input_data.columns)
+            if missing_features:
+                error_msg = f"缺少特征: {missing_features}。请确保提供所有17个特征。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保特征顺序正确
+            input_data = input_data[feature_names]
+        else:
+            # 从测试数据中随机抽取样本
+            sample_count = request.sample_count if request.sample_count > 0 else 1
+            sample_count = min(sample_count, len(test_data))
+            
+            # 随机抽取样本
+            sample_indices = random.sample(range(len(test_data)), sample_count)
+            input_data = test_data.iloc[sample_indices, :-1]  # 排除目标变量
+            print(f"随机抽取 {sample_count} 个样本进行预测")
+        
+        print(f"输入数据形状: {input_data.shape}")
+        
+        # 记录预测操作开始时间
+        prediction_start_time = time.time()
+        
+        # 进行预测
+        predictions = model.predict(input_data)
+        probabilities = model.predict_proba(input_data)[:, 1]
+        
+        # 记录预测操作耗时
+        prediction_duration = time.time() - prediction_start_time
+        PREDICTION_OPERATION_DURATION.observe(prediction_duration)
+        
+        print(f"预测完成: 类别={predictions.tolist()}, 概率={probabilities.tolist()}")
+
+        # 记录预测指标
+        for pred, prob in zip(predictions.tolist(), probabilities.tolist()):
+            PREDICTION_COUNT.labels(prediction_result=str(pred)).inc()
+            
+            # 记录预测结果的类别分布
+            PREDICTION_CLASS_DISTRIBUTION.labels(prediction_class=str(pred)).inc()
+            
+            # 记录预测结果的概率分布
+            # 根据概率值确定概率范围
+            prob_range = get_probability_range(prob)
+            PREDICTION_PROBABILITY_DISTRIBUTION.labels(prediction_class=str(pred), probability_range=prob_range).inc()
+
+        return PredictionResponse(
+            predictions=predictions.tolist(),
+            probabilities=probabilities.tolist()
+        )
+    except HTTPException:
+        # 直接传递HTTP异常
+        raise
+    except Exception as e:
+        error_msg = f"预测过程中出错: {str(e)}"
+        print(f"错误: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/shap-analysis", response_model=ShapAnalysisResponse)
+async def shap_analysis(
+    request: ShapAnalysisRequest = Body(
+        examples={
+            "sample_count_example": {
+                "summary": "使用样本数量",
+                "description": "使用样本数量进行SHAP分析",
+                "value": {
+                    "sample_count": 3,
+                    "features": None
+                }
+            },
+            "features_example": {
+                "summary": "使用特征数据",
+                "description": "直接提供特征数据进行SHAP分析",
+                "value": {
+                    "sample_count": 1,
+                    "features": [
+                        {
+                            " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
+                            " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
+                            " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
+                            " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
+                            " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
+                            " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
+                            " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
+                            " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
+                            " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
+                            " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
+                            " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
+                            " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
+                            " Net profit before tax/Paid-in capital": 0.18269361284971,
+                            " Cash/Total Assets": 0.427034273303766,
+                            " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
+                            " Equity to Liability": 0.221255812384907,
+                            " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
+                        }
+                    ]
+                }
+            }
+        }
+    )
+):
+    """
+    SHAP分析端点
+    
+    参数:
+    - request: SHAP分析请求，可以指定样本数量或直接提供特征数据
+    
+    返回:
+    - SHAP解释值、特征名称和基准值
+    """
+    if model is None or explainer is None or test_data is None:
+        raise HTTPException(status_code=500, detail="模型或数据未加载")
+    
+    try:
+        print(f"SHAP分析请求: sample_count={request.sample_count}, features={request.features is not None}")
+        
+        # 如果直接提供了特征数据
+        if request.features is not None and request.features:
+            print(f"提供的特征数据: {len(request.features)} 条记录")
+            print(f"第一条记录的特征: {list(request.features[0].keys())}")
+            
+            # 将提供的特征数据转换为DataFrame
+            input_data = pd.DataFrame(request.features)
+            
+            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
+            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
+                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保所有特征都存在
+            missing_features = set(feature_names) - set(input_data.columns)
+            if missing_features:
+                error_msg = f"缺少特征: {missing_features}。请确保提供所有17个特征。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保特征顺序正确
+            input_data = input_data[feature_names]
+        else:
+            # 从测试数据中随机抽取样本
+            sample_count = request.sample_count if request.sample_count > 0 else 1
+            sample_count = min(sample_count, len(test_data))
+            
+            # 随机抽取样本
+            sample_indices = random.sample(range(len(test_data)), sample_count)
+            input_data = test_data.iloc[sample_indices, :-1]  # 排除目标变量
+            print(f"随机抽取 {sample_count} 个样本进行SHAP分析")
+        
+        print(f"输入数据形状: {input_data.shape}")
+        
+        # 计算SHAP值
+        shap_values = explainer.shap_values(input_data)
+        
+        # 获取基准值
+        base_value = explainer.expected_value
+        
+        # 如果模型是多输出的，取第一个输出的基准值
+        if isinstance(base_value, (list, np.ndarray)):
+            base_value = base_value[0]
+        
+        # 将SHAP值转换为列表格式
+        shap_values_list = shap_values.tolist()
+        
+        print(f"SHAP分析完成: 基准值={base_value}, SHAP值形状={np.array(shap_values).shape}")
+        
+        return ShapAnalysisResponse(
+            shap_values=shap_values_list,
+            feature_names=feature_names,
+            base_value=float(base_value)
+        )
+    except HTTPException:
+        # 直接传递HTTP异常
+        raise
+    except Exception as e:
+        error_msg = f"SHAP分析过程中出错: {str(e)}"
+        print(f"错误: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/features")
+async def get_features():
+    """获取特征名称列表"""
+    if feature_names is None:
+        raise HTTPException(status_code=500, detail="特征数据未加载")
+    return {"features": feature_names}
+
+@app.get("/sample")
+async def get_sample(count: int = 1):
+    """
+    获取随机样本数据
+    
+    参数:
+    - count: 要获取的样本数量
+    
+    返回:
+    - 随机样本数据
+    """
+    if test_data is None:
+        raise HTTPException(status_code=500, detail="测试数据未加载")
+    
+    count = max(1, min(count, 10))  # 限制最多返回10个样本
+    
+    # 随机抽取样本
+    sample_indices = random.sample(range(len(test_data)), count)
+    samples = test_data.iloc[sample_indices].to_dict('records')
+    
+    return {"samples": samples}
+
+def calculate_feature_stats(data, feature_names):
+    """
+    计算特征的统计量信息
+    
+    参数:
+    - data: 数据DataFrame
+    - feature_names: 特征名称列表
+    
+    返回:
+    - 特征统计量字典
+    """
+    stats = {}
+    for feature in feature_names:
+        if feature in data.columns:
+            stats[feature] = {
+                'mean': float(data[feature].mean()),
+                'std': float(data[feature].std()),
+                'min': float(data[feature].min()),
+                'max': float(data[feature].max()),
+                'median': float(data[feature].median()),
+                'q25': float(data[feature].quantile(0.25)),
+                'q75': float(data[feature].quantile(0.75))
+            }
+    return stats
+
+def format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features=None):
+    """
+    格式化统计量信息，便于LLM解读
+    
+    参数:
+    - stats_bankrupt_0: Bankrupt=0的统计量
+    - stats_bankrupt_1: Bankrupt=1的统计量
+    - feature_names: 特征名称列表
+    - top_features: 需要显示的特征列表，如果为None则显示所有特征
+    
+    返回:
+    - 格式化后的统计量文本
+    """
+    formatted_text = "特征统计量信息（按Bankrupt标签分组）：\n\n"
+    
+    # 确定要显示的特征
+    features_to_show = top_features if top_features is not None else feature_names
+    
+    for feature in features_to_show:
+        if feature in stats_bankrupt_0 and feature in stats_bankrupt_1:
+            stats_0 = stats_bankrupt_0[feature]
+            stats_1 = stats_bankrupt_1[feature]
+            
+            formatted_text += f"特征: {feature}\n"
+            formatted_text += f"  Bankrupt=0 (样本数: {len(train_data[train_data['Bankrupt']==0])}):\n"
+            formatted_text += f"    均值: {stats_0['mean']:.4f}, 标准差: {stats_0['std']:.4f}\n"
+            formatted_text += f"    最小值: {stats_0['min']:.4f}, 最大值: {stats_0['max']:.4f}\n"
+            formatted_text += f"    中位数: {stats_0['median']:.4f}, 25%分位数: {stats_0['q25']:.4f}, 75%分位数: {stats_0['q75']:.4f}\n"
+            
+            formatted_text += f"  Bankrupt=1 (样本数: {len(train_data[train_data['Bankrupt']==1])}):\n"
+            formatted_text += f"    均值: {stats_1['mean']:.4f}, 标准差: {stats_1['std']:.4f}\n"
+            formatted_text += f"    最小值: {stats_1['min']:.4f}, 最大值: {stats_1['max']:.4f}\n"
+            formatted_text += f"    中位数: {stats_1['median']:.4f}, 25%分位数: {stats_1['q25']:.4f}, 75%分位数: {stats_1['q75']:.4f}\n"
+            
+            # 计算均值差异
+            mean_diff = stats_1['mean'] - stats_0['mean']
+            formatted_text += f"  均值差异 (Bankrupt=1 - Bankrupt=0): {mean_diff:.4f}\n\n"
+    
+    return formatted_text
+
+def format_shap_for_llm(shap_values, feature_names, input_data):
+    """
+    格式化SHAP值信息，便于LLM解读
+    
+    参数:
+    - shap_values: SHAP值数组
+    - feature_names: 特征名称列表
+    - input_data: 输入数据
+    
+    返回:
+    - 格式化后的SHAP值文本
+    """
+    formatted_text = "SHAP值分析结果：\n\n"
+    
+    for i, sample_shap_values in enumerate(shap_values):
+        formatted_text += f"样本 {i+1}:\n"
+        
+        # 创建特征名、SHAP值和特征值的元组列表
+        feature_shap_value_tuples = []
+        for j, (feature, shap_val) in enumerate(zip(feature_names, sample_shap_values)):
+            feature_val = input_data.iloc[i, j] if hasattr(input_data, 'iloc') else None
+            feature_shap_value_tuples.append((feature, shap_val, feature_val))
+        
+        # 按SHAP值绝对值降序排序
+        feature_shap_value_tuples.sort(key=lambda x: abs(x[1]), reverse=True)
+        
+        formatted_text += "  特征重要性排序（按SHAP值绝对值）:\n"
+        for feature, shap_val, feature_val in feature_shap_value_tuples[:5]:  # 只显示前5个最重要的特征
+            direction = "正向" if shap_val > 0 else "负向"
+            formatted_text += f"    {feature}: SHAP值={shap_val:.4f} ({direction}影响)"
+            if feature_val is not None:
+                formatted_text += f", 特征值={feature_val:.4f}"
+            formatted_text += "\n"
+        
+        formatted_text += "\n"
+    
+    return formatted_text
+
+@app.post("/shap-with-stats-analysis", response_model=ShapWithStatsResponse)
+async def shap_with_stats_analysis(
+    request: ShapAnalysisRequest = Body(
+        examples={
+            "sample_count_example": {
+                "summary": "使用样本数量",
+                "description": "使用样本数量进行SHAP与统计量分析",
+                "value": {
+                    "sample_count": 3,
+                    "features": None
+                }
+            },
+            "features_example": {
+                "summary": "使用特征数据",
+                "description": "直接提供特征数据进行SHAP与统计量分析",
+                "value": {
+                    "sample_count": 1,
+                    "features": [
+                        {
+                            " Net Value Growth Rate_x_ Equity to Liability": 0.000103828085865,
+                            " Interest-bearing debt interest rate_div_ Cash/Total Assets": 0.0,
+                            " Net Value Growth Rate_x_ Revenue Per Share (Yuan ¥)": 1.0,
+                            " Net Value Growth Rate_x_ Interest-bearing debt interest rate": 0.0,
+                            " Net profit before tax/Paid-in capital_div_ Interest-bearing debt interest rate": 18269361.284971,
+                            " Net profit before tax/Paid-in capital_div_ Cash/Total Assets": 0.4278195451575792,
+                            " Interest-bearing debt interest rate_div_ Revenue Per Share (Yuan ¥)": 0.0,
+                            " Revenue Per Share (Yuan ¥)_div_ Net Value Growth Rate": 20.98159187831598,
+                            " Interest-bearing debt interest rate_x_ Net profit before tax/Paid-in capital": 0.0,
+                            " Net Value Growth Rate_div_ Revenue Per Share (Yuan ¥)": 0.0476597619871344,
+                            " Net Value Growth Rate_x_ Net profit before tax/Paid-in capital": 8.5732112153338129e-05,
+                            " Net profit before tax/Paid-in capital_div_ Net Value Growth Rate": 389.308557737556,
+                            " Net profit before tax/Paid-in capital": 0.18269361284971,
+                            " Cash/Total Assets": 0.427034273303766,
+                            " Revenue Per Share (Yuan ¥)_div_ Cash/Total Assets": 0.0230571224692016,
+                            " Equity to Liability": 0.221255812384907,
+                            " Cash/Total Assets_div_ Net profit before tax/Paid-in capital": 2.3374339325191387
+                        }
+                    ]
+                }
+            }
+        }
+    )
+):
+    """
+    SHAP分析与统计量整合端点
+    
+    参数:
+    - request: SHAP分析请求，可以指定样本数量或直接提供特征数据
+    
+    返回:
+    - SHAP解释值、特征名称、基准值、分组统计量和LLM解读
+    """
+    if model is None or explainer is None or test_data is None or train_data is None:
+        raise HTTPException(status_code=500, detail="模型或数据未加载")
+    
+    try:
+        print(f"SHAP与统计量分析请求: sample_count={request.sample_count}, features={request.features is not None}")
+        
+        # 如果直接提供了特征数据
+        if request.features is not None and request.features:
+            print(f"提供的特征数据: {len(request.features)} 条记录")
+            print(f"第一条记录的特征: {list(request.features[0].keys())}")
+            
+            # 将提供的特征数据转换为DataFrame
+            input_data = pd.DataFrame(request.features)
+            
+            # 检查是否是Swagger UI的默认格式（只有additionalProp1, additionalProp2, additionalProp3）
+            if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
+                error_msg = "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保所有特征都存在
+            missing_features = set(feature_names) - set(input_data.columns)
+            if missing_features:
+                error_msg = f"缺少特征: {missing_features}。请确保提供所有17个特征。"
+                print(f"错误: {error_msg}")
+                raise HTTPException(status_code=400, detail=error_msg)
+            
+            # 确保特征顺序正确
+            input_data = input_data[feature_names]
+        else:
+            # 从测试数据中随机抽取样本
+            sample_count = request.sample_count if request.sample_count > 0 else 1
+            sample_count = min(sample_count, len(test_data))
+            
+            # 随机抽取样本
+            sample_indices = random.sample(range(len(test_data)), sample_count)
+            input_data = test_data.iloc[sample_indices, :-1]  # 排除目标变量
+            print(f"随机抽取 {sample_count} 个样本进行SHAP与统计量分析")
+        
+        print(f"输入数据形状: {input_data.shape}")
+        
+        # 计算SHAP值
+        shap_values = explainer.shap_values(input_data)
+        
+        # 获取基准值
+        base_value = explainer.expected_value
+        
+        # 如果模型是多输出的，取第一个输出的基准值
+        if isinstance(base_value, (list, np.ndarray)):
+            base_value = base_value[0]
+        
+        # 将SHAP值转换为列表格式
+        shap_values_list = shap_values.tolist()
+        
+        print(f"SHAP分析完成: 基准值={base_value}, SHAP值形状={np.array(shap_values).shape}")
+        
+        # 按Bankrupt标签分组计算统计量
+        print("计算分组统计量...")
+        bankrupt_0_data = train_data[train_data['Bankrupt'] == 0]
+        bankrupt_1_data = train_data[train_data['Bankrupt'] == 1]
+        
+        stats_bankrupt_0 = calculate_feature_stats(bankrupt_0_data, feature_names)
+        stats_bankrupt_1 = calculate_feature_stats(bankrupt_1_data, feature_names)
+        
+        print(f"分组统计量计算完成: Bankrupt=0有{len(bankrupt_0_data)}条样本, Bankrupt=1有{len(bankrupt_1_data)}条样本")
+        
+        # 获取按SHAP值绝对值排序后的前5个特征
+        top_features = []
+        for i, sample_shap_values in enumerate(shap_values):
+            # 创建特征名、SHAP值和特征值的元组列表
+            feature_shap_value_tuples = []
+            for j, (feature, shap_val) in enumerate(zip(feature_names, sample_shap_values)):
+                feature_val = input_data.iloc[i, j] if hasattr(input_data, 'iloc') else None
+                feature_shap_value_tuples.append((feature, shap_val, feature_val))
+            
+            # 按SHAP值绝对值降序排序
+            feature_shap_value_tuples.sort(key=lambda x: abs(x[1]), reverse=True)
+            
+            # 获取前5个最重要的特征
+            sample_top_features = [feature for feature, _, _ in feature_shap_value_tuples[:5]]
+            top_features.extend(sample_top_features)
+        
+        # 去重并保持顺序
+        seen = set()
+        top_features = [x for x in top_features if not (x in seen or seen.add(x))]
+        
+        # 格式化统计量和SHAP值，准备提交给LLM
+        stats_text = format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features)
+        shap_text = format_shap_for_llm(shap_values, feature_names, input_data)
+        
+        # 构建LLM提示
+        llm_prompt = f"""
+你是一位专业的数据科学家和机器学习专家。请分析以下SHAP值和特征统计量信息，并提供专业且清晰易懂的解读。
+
+{stats_text}
+{shap_text}
+
+请基于以上信息，提供以下分析：
+1. 对于Bankrupt=0和Bankrupt=1两组样本，哪些特征表现出最显著的差异？
+2. 根据SHAP值分析，哪些特征对模型的预测影响最大？是正向影响还是负向影响？
+3. 结合统计量信息和SHAP值，解释这些特征如何影响预测结果。
+4. 对于当前分析的样本，根据SHAP值和统计量对比，给出风险评估和建议。
+
+请提供专业、详细且易于理解的解读。
+"""
+        
+        # 调用Gemini大模型进行解读
+        print("正在调用Gemini大模型进行解读...")
+        llm_manager = create_llm("gemini")
+        
+        # 记录LLM解读操作开始时间
+        llm_start_time = time.time()
+        
+        # 创建一个StringIO对象来捕获流式输出
+        from io import StringIO
+        import sys
+        
+        # 重定向标准输出到StringIO对象
+        old_stdout = sys.stdout
+        sys.stdout = captured_output = StringIO()
+        
+        try:
+            # 调用LLM获取流式响应
+            llm_manager.get_response(
+                llm_prompt,
+                system_prompt="你是一位专业的数据科学家和机器学习专家，擅长解释SHAP值和统计分析结果。"
+            )
+            
+            # 获取捕获的输出
+            llm_interpretation = captured_output.getvalue()
+        finally:
+            # 恢复标准输出
+            sys.stdout = old_stdout
+        
+        # 记录LLM解读操作耗时
+        llm_duration = time.time() - llm_start_time
+        LLM_INTERPRETATION_DURATION.labels(model_type="gemini").observe(llm_duration)
+        
+        print("Gemini大模型解读完成")
+        
+        return ShapWithStatsResponse(
+            shap_values=shap_values_list,
+            feature_names=feature_names,
+            base_value=float(base_value),
+            stats_bankrupt_0=stats_bankrupt_0,
+            stats_bankrupt_1=stats_bankrupt_1,
+            llm_interpretation=llm_interpretation
+        )
+    except HTTPException:
+        # 直接传递HTTP异常
+        raise
+    except Exception as e:
+        error_msg = f"SHAP与统计量分析过程中出错: {str(e)}"
+        print(f"错误: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus监控指标端点"""
+    return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="localhost", port=8000)

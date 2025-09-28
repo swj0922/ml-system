@@ -1,0 +1,906 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>机器学习模型预测服务</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f8f9fa;
+        }
+        .container {
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            padding: 30px;
+            margin-bottom: 30px;
+        }
+        h1, h2, h3 {
+            color: #2c3e50;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .btn {
+            display: inline-block;
+            background-color: #3498db;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 5px;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #2980b9;
+        }
+        .btn-success {
+            background-color: #2ecc71;
+        }
+        .btn-success:hover {
+            background-color: #27ae60;
+        }
+        .input-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+        .result-container {
+            margin-top: 20px;
+            padding: 15px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            border-left: 4px solid #3498db;
+        }
+        .prediction-result {
+            margin-bottom: 15px;
+        }
+        .feature-importance {
+            margin-top: 20px;
+        }
+        .feature-bar {
+            margin-bottom: 8px;
+        }
+        .feature-name {
+            display: inline-block;
+            width: 300px;
+            font-size: 14px;
+        }
+        .shap-bar {
+            display: inline-block;
+            height: 20px;
+            background-color: #3498db;
+            margin-left: 10px;
+            border-radius: 3px;
+        }
+        .positive {
+            background-color: #e74c3c;
+        }
+        .negative {
+            background-color: #2ecc71;
+        }
+        .shap-value {
+            margin-left: 10px;
+            font-weight: bold;
+        }
+        .tab {
+            overflow: hidden;
+            border: 1px solid #ccc;
+            background-color: #f1f1f1;
+            margin-bottom: 20px;
+        }
+        .tab button {
+            background-color: inherit;
+            float: left;
+            border: none;
+            outline: none;
+            cursor: pointer;
+            padding: 14px 16px;
+            transition: 0.3s;
+            font-size: 16px;
+        }
+        .tab button:hover {
+            background-color: #ddd;
+        }
+        .tab button.active {
+            background-color: #3498db;
+            color: white;
+        }
+        .tabcontent {
+            display: none;
+            padding: 20px;
+            border: 1px solid #ccc;
+            border-top: none;
+        }
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 2s linear infinite;
+            margin: 0 auto;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .error-message {
+            color: #e74c3c;
+            margin-top: 10px;
+            display: none;
+        }
+        .api-info {
+            background-color: #f8f9fa;
+            padding: 15px;
+            border-radius: 4px;
+            margin-bottom: 20px;
+        }
+        .api-endpoint {
+            font-family: monospace;
+            background-color: #e9ecef;
+            padding: 5px;
+            border-radius: 3px;
+        }
+    </style>
+</head>
+<body>
+    <h1>机器学习模型预测服务</h1>
+    
+    <div class="container">
+        <h2>API信息</h2>
+        <div class="api-info">
+            <p><strong>服务状态:</strong> <span id="api-status">检查中...</span></p>
+            <p><strong>API文档:</strong> <a href="/docs" target="_blank">Swagger UI</a></p>
+            <p><strong>预测端点:</strong> <span class="api-endpoint">POST /predict</span></p>
+            <p><strong>特征列表端点:</strong> <span class="api-endpoint">GET /features</span></p>
+            <p><strong>随机样本端点:</strong> <span class="api-endpoint">GET /sample?count=1</span></p>
+            <p><strong>SHAP分析端点:</strong> <span class="api-endpoint">POST /shap-analysis</span></p>
+            <p><strong>SHAP与统计量分析端点:</strong> <span class="api-endpoint">POST /shap-with-stats-analysis</span></p>
+        </div>
+    </div>
+
+    <div class="container">
+        <h2>预测功能</h2>
+        
+        <div class="tab">
+            <button class="tablinks active" onclick="openTab(event, 'random-sample')">随机样本预测</button>
+            <button class="tablinks" onclick="openTab(event, 'manual-input')">手动输入预测</button>
+            <button class="tablinks" onclick="openTab(event, 'shap-analysis')">SHAP分析</button>
+            <button class="tablinks" onclick="openTab(event, 'shap-stats-analysis')">SHAP与统计量分析</button>
+        </div>
+        
+        <div id="random-sample" class="tabcontent" style="display: block;">
+            <div class="input-group">
+                <label for="sample-count">样本数量:</label>
+                <input type="number" id="sample-count" min="1" max="10" value="1">
+            </div>
+            <button class="btn" onclick="getRandomSample()">获取随机样本</button>
+            <button class="btn btn-success" onclick="predictRandomSample()">预测随机样本</button>
+            
+            <div id="random-sample-data"></div>
+        </div>
+        
+        <div id="manual-input" class="tabcontent">
+            <div id="feature-inputs"></div>
+            <button class="btn btn-success" onclick="predictManualInput()">预测手动输入</button>
+        </div>
+        
+        <div id="shap-analysis" class="tabcontent">
+            <div class="input-group">
+                <label for="shap-sample-count">样本数量:</label>
+                <input type="number" id="shap-sample-count" min="1" max="10" value="1">
+            </div>
+            <button class="btn" onclick="getRandomSampleForShap()">获取随机样本</button>
+            <button class="btn btn-success" onclick="analyzeRandomSample()">分析随机样本</button>
+            
+            <div id="shap-random-sample-data"></div>
+            
+            <h3>手动输入分析</h3>
+            <div id="shap-feature-inputs"></div>
+            <button class="btn btn-success" onclick="analyzeManualInput()">分析手动输入</button>
+        </div>
+        
+        <div id="shap-stats-analysis" class="tabcontent">
+            <div class="input-group">
+                <label for="shap-stats-sample-count">样本数量:</label>
+                <input type="number" id="shap-stats-sample-count" min="1" max="10" value="1">
+            </div>
+            <button class="btn" onclick="getRandomSampleForShapStats()">获取随机样本</button>
+            <button class="btn btn-success" onclick="analyzeRandomSampleWithStats()">分析随机样本</button>
+            
+            <div id="shap-stats-random-sample-data"></div>
+            
+            <h3>手动输入分析</h3>
+            <div id="shap-stats-feature-inputs"></div>
+            <button class="btn btn-success" onclick="analyzeManualInputWithStats()">分析手动输入</button>
+            
+            <div id="llm-interpretation-container"></div>
+        </div>
+        
+        <div class="loading" id="loading">
+            <div class="spinner"></div>
+            <p>正在处理请求...</p>
+        </div>
+        
+        <div class="error-message" id="error-message"></div>
+        
+        <div id="prediction-results"></div>
+    </div>
+
+    <script>
+        // API基础URL
+        const API_BASE = '';
+        
+        // 页面加载时检查API状态并获取特征列表
+        document.addEventListener('DOMContentLoaded', function() {
+            checkApiStatus();
+            getFeatures();
+        });
+        
+        // 检查API状态
+        async function checkApiStatus() {
+            try {
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                document.getElementById('api-status').textContent = data.status === 'healthy' ? '正常运行' : '异常';
+                document.getElementById('api-status').style.color = data.status === 'healthy' ? '#2ecc71' : '#e74c3c';
+            } catch (error) {
+                document.getElementById('api-status').textContent = '无法连接';
+                document.getElementById('api-status').style.color = '#e74c3c';
+            }
+        }
+        
+        // 获取特征列表
+        let featureNames = [];
+        async function getFeatures() {
+            try {
+                const response = await fetch(`${API_BASE}/features`);
+                const data = await response.json();
+                featureNames = data.features;
+                createFeatureInputs();
+                createShapFeatureInputs();
+                createShapStatsFeatureInputs();
+            } catch (error) {
+                showError('获取特征列表失败: ' + error.message);
+            }
+        }
+        
+        // 创建特征输入表单
+        function createFeatureInputs() {
+            const container = document.getElementById('feature-inputs');
+            container.innerHTML = '';
+            
+            featureNames.forEach(feature => {
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'input-group';
+                
+                const label = document.createElement('label');
+                label.textContent = feature;
+                
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = 'any';
+                input.id = `feature-${feature}`;
+                input.placeholder = `输入 ${feature} 的值`;
+                
+                inputGroup.appendChild(label);
+                inputGroup.appendChild(input);
+                container.appendChild(inputGroup);
+            });
+        }
+        
+        // 创建SHAP特征输入表单
+        function createShapFeatureInputs() {
+            const container = document.getElementById('shap-feature-inputs');
+            container.innerHTML = '';
+            
+            featureNames.forEach(feature => {
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'input-group';
+                
+                const label = document.createElement('label');
+                label.textContent = feature;
+                
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = 'any';
+                input.id = `shap-feature-${feature}`;
+                input.placeholder = `输入 ${feature} 的值`;
+                
+                inputGroup.appendChild(label);
+                inputGroup.appendChild(input);
+                container.appendChild(inputGroup);
+            });
+        }
+        
+        // 创建SHAP与统计量分析特征输入表单
+        function createShapStatsFeatureInputs() {
+            const container = document.getElementById('shap-stats-feature-inputs');
+            container.innerHTML = '';
+            
+            featureNames.forEach(feature => {
+                const inputGroup = document.createElement('div');
+                inputGroup.className = 'input-group';
+                
+                const label = document.createElement('label');
+                label.textContent = feature;
+                
+                const input = document.createElement('input');
+                input.type = 'number';
+                input.step = 'any';
+                input.id = `shap-stats-feature-${feature}`;
+                input.placeholder = `输入 ${feature} 的值`;
+                
+                inputGroup.appendChild(label);
+                inputGroup.appendChild(input);
+                container.appendChild(inputGroup);
+            });
+        }
+        
+        // 获取随机样本
+        async function getRandomSample() {
+            const count = document.getElementById('sample-count').value;
+            
+            try {
+                showLoading(true);
+                const response = await fetch(`${API_BASE}/sample?count=${count}`);
+                const data = await response.json();
+                
+                displayRandomSample(data.samples);
+            } catch (error) {
+                showError('获取随机样本失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示随机样本
+        function displayRandomSample(samples) {
+            const container = document.getElementById('random-sample-data');
+            container.innerHTML = '<h3>随机样本数据:</h3>';
+            
+            samples.forEach((sample, index) => {
+                const sampleDiv = document.createElement('div');
+                sampleDiv.className = 'result-container';
+                
+                let html = `<h4>样本 ${index + 1}</h4>`;
+                html += '<table style="width: 100%; border-collapse: collapse;">';
+                
+                // 只显示前10个特征，避免表格过长
+                const featuresToShow = Object.keys(sample).slice(0, 10);
+                featuresToShow.forEach(feature => {
+                    if (feature !== 'Bankrupt') {  // 排除目标变量
+                        html += `<tr><td style="padding: 5px; border: 1px solid #ddd;">${feature}</td><td style="padding: 5px; border: 1px solid #ddd;">${sample[feature]}</td></tr>`;
+                    }
+                });
+                
+                if (Object.keys(sample).length > 11) {  // 如果有超过10个特征
+                    html += `<tr><td colspan="2" style="padding: 5px; border: 1px solid #ddd; text-align: center;">... 还有 ${Object.keys(sample).length - 11} 个特征</td></tr>`;
+                }
+                
+                html += '</table>';
+                sampleDiv.innerHTML = html;
+                container.appendChild(sampleDiv);
+            });
+        }
+        
+        // 预测随机样本
+        async function predictRandomSample() {
+            const count = document.getElementById('sample-count').value;
+            
+            try {
+                showLoading(true);
+                const response = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        sample_count: parseInt(count)
+                    })
+                });
+                
+                const data = await response.json();
+                displayPredictionResults(data);
+                
+                // 获取SHAP分析
+                await getShapAnalysis(count);
+            } catch (error) {
+                showError('预测失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 预测手动输入
+        async function predictManualInput() {
+            const features = {};
+            
+            featureNames.forEach(feature => {
+                const input = document.getElementById(`feature-${feature}`);
+                const value = parseFloat(input.value);
+                
+                if (isNaN(value)) {
+                    throw new Error(`请输入有效的 ${feature} 值`);
+                }
+                
+                features[feature] = value;
+            });
+            
+            try {
+                showLoading(true);
+                const response = await fetch(`${API_BASE}/predict`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        features: [features]
+                    })
+                });
+                
+                const data = await response.json();
+                displayPredictionResults(data);
+                
+                // 获取SHAP分析
+                await getShapAnalysis(1, [features]);
+            } catch (error) {
+                showError('预测失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示预测结果
+        function displayPredictionResults(data) {
+            const container = document.getElementById('prediction-results');
+            container.innerHTML = '<h2>预测结果</h2>';
+            
+            data.predictions.forEach((prediction, index) => {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'result-container';
+                
+                const probability = data.probabilities[index];
+                const predictionText = prediction === 1 ? '破产' : '正常';
+                const predictionColor = prediction === 1 ? '#e74c3c' : '#2ecc71';
+                
+                let html = `
+                    <div class="prediction-result">
+                        <h3>样本 ${index + 1}</h3>
+                        <p><strong>预测结果:</strong> <span style="color: ${predictionColor}">${predictionText}</span></p>
+                        <p><strong>破产概率:</strong> ${(probability * 100).toFixed(2)}%</p>
+                    </div>
+                `;
+                
+                resultDiv.innerHTML = html;
+                container.appendChild(resultDiv);
+            });
+        }
+        
+        // 获取SHAP分析
+        async function getShapAnalysis(sampleCount, features = null) {
+            try {
+                showLoading(true);
+                
+                let requestBody;
+                if (features) {
+                    requestBody = { features: features };
+                } else {
+                    requestBody = { sample_count: parseInt(sampleCount) };
+                }
+                
+                const response = await fetch(`${API_BASE}/shap-analysis`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                displayShapResults(data);
+            } catch (error) {
+                showError('SHAP分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示SHAP分析结果
+        function displayShapResults(data) {
+            const container = document.getElementById('prediction-results');
+            
+            // 如果容器中没有预测结果，先添加一个标题
+            if (!container.innerHTML.includes('预测结果')) {
+                container.innerHTML = '<h2>SHAP分析结果</h2>';
+            }
+            
+            data.shap_values.forEach((shapValues, index) => {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'result-container';
+                
+                let html = `
+                    <div class="prediction-result">
+                        <h3>样本 ${index + 1} 的SHAP分析</h3>
+                        <p><strong>基准值:</strong> ${data.base_value.toFixed(4)}</p>
+                    </div>
+                `;
+                
+                // 添加SHAP解释
+                html += '<div class="feature-importance">';
+                html += '<h4>特征重要性 (SHAP值)</h4>';
+                
+                // 计算每个特征的SHAP值
+                const featureImportance = [];
+                
+                data.feature_names.forEach((name, i) => {
+                    featureImportance.push({
+                        name: name,
+                        value: shapValues[i]
+                    });
+                });
+                
+                // 按SHAP值绝对值排序
+                featureImportance.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+                
+                // 显示前10个最重要的特征
+                featureImportance.slice(0, 10).forEach(feature => {
+                    const isPositive = feature.value >= 0;
+                    const barWidth = Math.min(Math.abs(feature.value) * 100, 300); // 限制最大宽度
+                    
+                    html += `
+                        <div class="feature-bar">
+                            <span class="feature-name">${feature.name}:</span>
+                            <span class="shap-bar ${isPositive ? 'positive' : 'negative'}" style="width: ${barWidth}px;"></span>
+                            <span class="shap-value">${feature.value.toFixed(4)}</span>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                resultDiv.innerHTML = html;
+                container.appendChild(resultDiv);
+            });
+        }
+        
+        // 切换标签页
+        function openTab(evt, tabName) {
+            const tabcontent = document.getElementsByClassName("tabcontent");
+            for (let i = 0; i < tabcontent.length; i++) {
+                tabcontent[i].style.display = "none";
+            }
+            
+            const tablinks = document.getElementsByClassName("tablinks");
+            for (let i = 0; i < tablinks.length; i++) {
+                tablinks[i].className = tablinks[i].className.replace(" active", "");
+            }
+            
+            document.getElementById(tabName).style.display = "block";
+            evt.currentTarget.className += " active";
+        }
+        
+        // 显示/隐藏加载状态
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+        
+        // 显示错误信息
+        function showError(message) {
+            const errorElement = document.getElementById('error-message');
+            errorElement.textContent = message;
+            errorElement.style.display = 'block';
+            
+            // 5秒后自动隐藏错误信息
+            setTimeout(() => {
+                errorElement.style.display = 'none';
+            }, 5000);
+        }
+        
+        // 获取SHAP分析的随机样本
+        async function getRandomSampleForShap() {
+            const count = document.getElementById('shap-sample-count').value;
+            
+            try {
+                showLoading(true);
+                const response = await fetch(`${API_BASE}/sample?count=${count}`);
+                const data = await response.json();
+                
+                displayShapRandomSample(data.samples);
+            } catch (error) {
+                showError('获取随机样本失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示SHAP分析的随机样本
+        function displayShapRandomSample(samples) {
+            const container = document.getElementById('shap-random-sample-data');
+            container.innerHTML = '<h3>随机样本数据:</h3>';
+            
+            samples.forEach((sample, index) => {
+                const sampleDiv = document.createElement('div');
+                sampleDiv.className = 'result-container';
+                
+                let html = `<h4>样本 ${index + 1}</h4>`;
+                html += '<table style="width: 100%; border-collapse: collapse;">';
+                
+                // 只显示前10个特征，避免表格过长
+                const featuresToShow = Object.keys(sample).slice(0, 10);
+                featuresToShow.forEach(feature => {
+                    if (feature !== 'Bankrupt') {  // 排除目标变量
+                        html += `<tr><td style="padding: 5px; border: 1px solid #ddd;">${feature}</td><td style="padding: 5px; border: 1px solid #ddd;">${sample[feature]}</td></tr>`;
+                    }
+                });
+                
+                if (Object.keys(sample).length > 11) {  // 如果有超过10个特征
+                    html += `<tr><td colspan="2" style="padding: 5px; border: 1px solid #ddd; text-align: center;">... 还有 ${Object.keys(sample).length - 11} 个特征</td></tr>`;
+                }
+                
+                html += '</table>';
+                sampleDiv.innerHTML = html;
+                container.appendChild(sampleDiv);
+            });
+        }
+        
+        // 分析随机样本
+        async function analyzeRandomSample() {
+            const count = document.getElementById('shap-sample-count').value;
+            
+            try {
+                showLoading(true);
+                await getShapAnalysis(count);
+            } catch (error) {
+                showError('SHAP分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 分析手动输入
+        async function analyzeManualInput() {
+            const features = {};
+            
+            featureNames.forEach(feature => {
+                const input = document.getElementById(`shap-feature-${feature}`);
+                const value = parseFloat(input.value);
+                
+                if (isNaN(value)) {
+                    throw new Error(`请输入有效的 ${feature} 值`);
+                }
+                
+                features[feature] = value;
+            });
+            
+            try {
+                showLoading(true);
+                await getShapAnalysis(1, [features]);
+            } catch (error) {
+                showError('SHAP分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 获取SHAP与统计量分析的随机样本
+        async function getRandomSampleForShapStats() {
+            const count = document.getElementById('shap-stats-sample-count').value;
+            
+            try {
+                showLoading(true);
+                const response = await fetch(`${API_BASE}/sample?count=${count}`);
+                const data = await response.json();
+                
+                displayShapStatsRandomSample(data.samples);
+            } catch (error) {
+                showError('获取随机样本失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示SHAP与统计量分析的随机样本
+        function displayShapStatsRandomSample(samples) {
+            const container = document.getElementById('shap-stats-random-sample-data');
+            container.innerHTML = '<h3>随机样本数据:</h3>';
+            
+            samples.forEach((sample, index) => {
+                const sampleDiv = document.createElement('div');
+                sampleDiv.className = 'result-container';
+                
+                let html = `<h4>样本 ${index + 1}</h4>`;
+                html += '<table style="width: 100%; border-collapse: collapse;">';
+                
+                // 只显示前10个特征，避免表格过长
+                const featuresToShow = Object.keys(sample).slice(0, 10);
+                featuresToShow.forEach(feature => {
+                    if (feature !== 'Bankrupt') {  // 排除目标变量
+                        html += `<tr><td style="padding: 5px; border: 1px solid #ddd;">${feature}</td><td style="padding: 5px; border: 1px solid #ddd;">${sample[feature]}</td></tr>`;
+                    }
+                });
+                
+                if (Object.keys(sample).length > 11) {  // 如果有超过10个特征
+                    html += `<tr><td colspan="2" style="padding: 5px; border: 1px solid #ddd; text-align: center;">... 还有 ${Object.keys(sample).length - 11} 个特征</td></tr>`;
+                }
+                
+                html += '</table>';
+                sampleDiv.innerHTML = html;
+                container.appendChild(sampleDiv);
+            });
+        }
+        
+        // 分析随机样本（带统计量）
+        async function analyzeRandomSampleWithStats() {
+            const count = document.getElementById('shap-stats-sample-count').value;
+            
+            try {
+                showLoading(true);
+                await getShapWithStatsAnalysis(count);
+            } catch (error) {
+                showError('SHAP与统计量分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 分析手动输入（带统计量）
+        async function analyzeManualInputWithStats() {
+            const features = {};
+            
+            featureNames.forEach(feature => {
+                const input = document.getElementById(`shap-stats-feature-${feature}`);
+                const value = parseFloat(input.value);
+                
+                if (isNaN(value)) {
+                    throw new Error(`请输入有效的 ${feature} 值`);
+                }
+                
+                features[feature] = value;
+            });
+            
+            try {
+                showLoading(true);
+                await getShapWithStatsAnalysis(1, [features]);
+            } catch (error) {
+                showError('SHAP与统计量分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 获取SHAP与统计量分析
+        async function getShapWithStatsAnalysis(sampleCount, features = null) {
+            try {
+                showLoading(true);
+                
+                let requestBody;
+                if (features) {
+                    requestBody = { features: features };
+                } else {
+                    requestBody = { sample_count: parseInt(sampleCount) };
+                }
+                
+                const response = await fetch(`${API_BASE}/shap-with-stats-analysis`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify(requestBody)
+                });
+                
+                const data = await response.json();
+                displayShapWithStatsResults(data);
+            } catch (error) {
+                showError('SHAP与统计量分析失败: ' + error.message);
+            } finally {
+                showLoading(false);
+            }
+        }
+        
+        // 显示SHAP与统计量分析结果
+        function displayShapWithStatsResults(data) {
+            const container = document.getElementById('prediction-results');
+            container.innerHTML = '<h2>SHAP与统计量分析结果</h2>';
+            
+            data.shap_values.forEach((shapValues, index) => {
+                const resultDiv = document.createElement('div');
+                resultDiv.className = 'result-container';
+                
+                let html = `
+                    <div class="prediction-result">
+                        <h3>样本 ${index + 1} 的SHAP分析</h3>
+                        <p><strong>基准值:</strong> ${data.base_value.toFixed(4)}</p>
+                    </div>
+                `;
+                
+                // 添加SHAP解释
+                html += '<div class="feature-importance">';
+                html += '<h4>特征重要性 (SHAP值)</h4>';
+                
+                // 计算每个特征的SHAP值
+                const featureImportance = [];
+                
+                data.feature_names.forEach((name, i) => {
+                    featureImportance.push({
+                        name: name,
+                        value: shapValues[i]
+                    });
+                });
+                
+                // 按SHAP值绝对值排序
+                featureImportance.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+                
+                // 显示前10个最重要的特征
+                featureImportance.slice(0, 10).forEach(feature => {
+                    const isPositive = feature.value >= 0;
+                    const barWidth = Math.min(Math.abs(feature.value) * 100, 300); // 限制最大宽度
+                    
+                    html += `
+                        <div class="feature-bar">
+                            <span class="feature-name">${feature.name}:</span>
+                            <span class="shap-bar ${isPositive ? 'positive' : 'negative'}" style="width: ${barWidth}px;"></span>
+                            <span class="shap-value">${feature.value.toFixed(4)}</span>
+                        </div>
+                    `;
+                });
+                
+                html += '</div>';
+                resultDiv.innerHTML = html;
+                container.appendChild(resultDiv);
+            });
+            
+            // 添加LLM解读（流式显示）
+            const llmDiv = document.createElement('div');
+            llmDiv.className = 'result-container';
+            llmDiv.innerHTML = `
+                <div class="prediction-result">
+                    <h3>LLM解读</h3>
+                    <div id="llm-interpretation" style="white-space: pre-line; font-family: monospace;"></div>
+                </div>
+            `;
+            container.appendChild(llmDiv);
+            
+            // 模拟流式显示效果
+            const llmInterpretationDiv = document.getElementById('llm-interpretation');
+            const fullText = data.llm_interpretation;
+            let index = 0;
+            
+            function typeWriter() {
+                if (index < fullText.length) {
+                    llmInterpretationDiv.innerHTML += fullText.charAt(index);
+                    index++;
+                    setTimeout(typeWriter, 2); // 控制显示速度
+                }
+            }
+            
+            // 开始流式显示
+            typeWriter();
+        }
+    </script>
+</body>
+</html>
