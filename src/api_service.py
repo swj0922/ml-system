@@ -19,6 +19,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
+from datetime import datetime
 
 # 导入大模型配置
 from llm_config import create_llm
@@ -634,42 +635,48 @@ def calculate_feature_stats(data, feature_names):
 def format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features=None):
     """
     格式化统计量信息，便于LLM解读
-    
+
     参数:
     - stats_bankrupt_0: Bankrupt=0的统计量
     - stats_bankrupt_1: Bankrupt=1的统计量
     - feature_names: 特征名称列表
     - top_features: 需要显示的特征列表，如果为None则显示所有特征
-    
+
     返回:
     - 格式化后的统计量文本
     """
-    formatted_text = "特征统计量信息（按Bankrupt标签分组）：\n\n"
-    
+    # 获取Bankrupt=0和Bankrupt=1的样本数
+    # 假设train_data在当前作用域可访问，或者通过参数传入
+    # 为了简化，这里直接从stats_bankrupt_0/1中获取任意一个特征的统计量来推断样本数
+    # 实际应用中，建议直接传入样本数
+    sample_count_0 = len(train_data[train_data['Bankrupt']==0])
+    sample_count_1 = len(train_data[train_data['Bankrupt']==1])
+
+    formatted_text = f"特征统计量信息（按Bankrupt标签分组）：\n"
+    formatted_text += f"  Bankrupt=0 样本总数: {sample_count_0}\n"
+    formatted_text += f"  Bankrupt=1 样本总数: {sample_count_1}\n\n"
+
     # 确定要显示的特征
     features_to_show = top_features if top_features is not None else feature_names
-    
+
     for feature in features_to_show:
         if feature in stats_bankrupt_0 and feature in stats_bankrupt_1:
             stats_0 = stats_bankrupt_0[feature]
             stats_1 = stats_bankrupt_1[feature]
-            
+
             formatted_text += f"特征: {feature}\n"
-            formatted_text += f"  Bankrupt=0 (样本数: {len(train_data[train_data['Bankrupt']==0])}):\n"
+            formatted_text += f"  Bankrupt=0:\n"
             formatted_text += f"    均值: {stats_0['mean']:.4f}, 标准差: {stats_0['std']:.4f}\n"
             formatted_text += f"    最小值: {stats_0['min']:.4f}, 最大值: {stats_0['max']:.4f}\n"
-            formatted_text += f"    中位数: {stats_0['median']:.4f}, 25%分位数: {stats_0['q25']:.4f}, 75%分位数: {stats_0['q75']:.4f}\n"
-            
-            formatted_text += f"  Bankrupt=1 (样本数: {len(train_data[train_data['Bankrupt']==1])}):\n"
+            formatted_text += f"    中位数: {stats_0['median']:.4f}\n"
+
+            formatted_text += f"  Bankrupt=1:\n"
             formatted_text += f"    均值: {stats_1['mean']:.4f}, 标准差: {stats_1['std']:.4f}\n"
             formatted_text += f"    最小值: {stats_1['min']:.4f}, 最大值: {stats_1['max']:.4f}\n"
-            formatted_text += f"    中位数: {stats_1['median']:.4f}, 25%分位数: {stats_1['q25']:.4f}, 75%分位数: {stats_1['q75']:.4f}\n"
-            
-            # 计算均值差异
-            mean_diff = stats_1['mean'] - stats_0['mean']
-            formatted_text += f"  均值差异 (Bankrupt=1 - Bankrupt=0): {mean_diff:.4f}\n\n"
-    
+            formatted_text += f"    中位数: {stats_1['median']:.4f}\n"
+
     return formatted_text
+
 
 def format_shap_for_llm(shap_values, feature_names, input_data):
     """
@@ -750,17 +757,10 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                     "message": "开始SHAP分析..."
                 }))
                 
-                # 处理输入数据（与原有逻辑相同）
+                # 处理输入数据
                 if request.features is not None and request.features:
                     print(f"提供的特征数据: {len(request.features)} 条记录")
                     input_data = pd.DataFrame(request.features)
-                    
-                    if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
-                        await websocket.send_text(json.dumps({
-                            "type": "error",
-                            "message": "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
-                        }))
-                        continue
                     
                     missing_features = set(feature_names) - set(input_data.columns)
                     if missing_features:
@@ -859,7 +859,9 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                 # 格式化数据准备提交给LLM
                 stats_text = format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features)
                 shap_text = format_shap_for_llm(shap_values, feature_names, input_data)
-                
+                print(f"stats_text是：{stats_text}")
+                print(f"shap_text是：{shap_text}")
+
                 # 构建LLM提示
                 llm_prompt = f"""
 你是一位专业的数据科学家和机器学习专家。请分析以下SHAP值和特征统计量信息，并提供专业且清晰易懂的解读。
@@ -913,7 +915,6 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                 }))
                 
                 print("Gemini大模型流式解读完成")
-                
             except Exception as e:
                 error_msg = f"SHAP与统计量分析过程中出错: {str(e)}"
                 print(f"错误: {error_msg}")
