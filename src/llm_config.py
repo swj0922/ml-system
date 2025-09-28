@@ -41,6 +41,20 @@ class BaseLLM(ABC):
             str: 模型的回复内容
         """
         pass
+    
+    @abstractmethod
+    def get_streaming_response(self, prompt, system_prompt="You are a helpful assistant."):
+        """
+        获取模型流式回复
+        
+        Args:
+            prompt (str): 用户输入的提示
+            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+        
+        Yields:
+            str: 模型的流式回复内容片段
+        """
+        pass
 
 
 class GeminiLLM(BaseLLM):
@@ -106,6 +120,33 @@ class GeminiLLM(BaseLLM):
         print()
         
         return "".join(collected_messages)
+    
+    def get_streaming_response(self, prompt, system_prompt="You are a helpful assistant."):
+        """
+        使用Gemini模型获取流式回复
+        
+        Args:
+            prompt (str): 用户输入的提示
+            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+        
+        Yields:
+            str: 模型的流式回复内容片段
+        """
+        client = self.get_client()
+        
+        response = client.chat.completions.create(
+            model="gemini-2.5-flash",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            stream=True  # 启用流式输出
+        )
+
+        for chunk in response:
+            chunk_message = chunk.choices[0].delta.content
+            if chunk_message:
+                yield chunk_message
 
 
 class QwenLLM(BaseLLM):
@@ -164,6 +205,34 @@ class QwenLLM(BaseLLM):
         )
         
         return response.choices[0].message.content
+    
+    def get_streaming_response(self, prompt, system_prompt="You are a helpful assistant.", model="qwen-turbo"):
+        """
+        使用Qwen模型获取流式回复
+        
+        Args:
+            prompt (str): 用户输入的提示
+            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+            model (str): 使用的Qwen模型，默认为"qwen-turbo"
+        
+        Yields:
+            str: 模型的流式回复内容片段
+        """
+        client = self.get_client()
+        
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": prompt}
+            ],
+            stream=True  # 启用流式输出
+        )
+        
+        for chunk in response:
+            chunk_message = chunk.choices[0].delta.content
+            if chunk_message:
+                yield chunk_message
 
 
 # 工厂函数，用于创建不同类型的LLM实例

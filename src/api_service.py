@@ -9,9 +9,11 @@ import numpy as np
 import joblib
 import shap
 import time
+import json
+import asyncio
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Body, Response
+from fastapi import FastAPI, HTTPException, Body, Response, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -19,7 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTENT_TYPE_LATEST
 
 # 导入大模型配置
-from .llm_config import create_llm
+from llm_config import create_llm
 
 # 定义生命周期管理器
 @asynccontextmanager
@@ -930,6 +932,227 @@ async def shap_with_stats_analysis(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
+
+@app.websocket("/ws/shap-with-stats-analysis")
+async def websocket_shap_with_stats_analysis(websocket: WebSocket):
+    """
+    WebSocket端点：SHAP分析与统计量整合（流式输出）
+    """
+    await websocket.accept()
+    
+    try:
+        while True:
+            # 接收客户端请求
+            data = await websocket.receive_text()
+            request_data = json.loads(data)
+            
+            # 验证请求数据格式
+            try:
+                request = ShapAnalysisRequest(**request_data)
+            except Exception as e:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": f"请求数据格式错误: {str(e)}"
+                }))
+                continue
+            
+            if model is None or explainer is None or test_data is None or train_data is None:
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": "模型或数据未加载"
+                }))
+                continue
+            
+            try:
+                print(f"WebSocket SHAP与统计量分析请求: sample_count={request.sample_count}, features={request.features is not None}")
+                
+                # 发送开始分析消息
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "开始SHAP分析..."
+                }))
+                
+                # 处理输入数据（与原有逻辑相同）
+                if request.features is not None and request.features:
+                    print(f"提供的特征数据: {len(request.features)} 条记录")
+                    input_data = pd.DataFrame(request.features)
+                    
+                    if set(input_data.columns) == {'additionalProp1', 'additionalProp2', 'additionalProp3'}:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": "检测到Swagger UI默认格式。请使用正确的特征格式或通过/sample端点获取示例数据。"
+                        }))
+                        continue
+                    
+                    missing_features = set(feature_names) - set(input_data.columns)
+                    if missing_features:
+                        await websocket.send_text(json.dumps({
+                            "type": "error",
+                            "message": f"缺少特征: {missing_features}。请确保提供所有17个特征。"
+                        }))
+                        continue
+                    
+                    input_data = input_data[feature_names]
+                else:
+                    sample_count = request.sample_count if request.sample_count > 0 else 1
+                    sample_count = min(sample_count, len(test_data))
+                    sample_indices = random.sample(range(len(test_data)), sample_count)
+                    input_data = test_data.iloc[sample_indices, :-1]
+                    print(f"随机抽取 {sample_count} 个样本进行SHAP与统计量分析")
+                
+                print(f"输入数据形状: {input_data.shape}")
+                
+                # 计算SHAP值
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "计算SHAP值..."
+                }))
+                
+                # 使用异步执行避免阻塞事件循环
+                shap_values = await asyncio.to_thread(explainer.shap_values, input_data)
+                base_value = explainer.expected_value
+                
+                if isinstance(base_value, (list, np.ndarray)):
+                    base_value = base_value[0]
+                
+                shap_values_list = shap_values.tolist()
+                
+                print(f"SHAP分析完成: 基准值={base_value}, SHAP值形状={np.array(shap_values).shape}")
+                
+                # 计算分组统计量
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "计算分组统计量..."
+                }))
+                
+                bankrupt_0_data = train_data[train_data['Bankrupt'] == 0]
+                bankrupt_1_data = train_data[train_data['Bankrupt'] == 1]
+                
+                # 使用异步执行避免阻塞事件循环
+                stats_bankrupt_0 = await asyncio.to_thread(calculate_feature_stats, bankrupt_0_data, feature_names)
+                stats_bankrupt_1 = await asyncio.to_thread(calculate_feature_stats, bankrupt_1_data, feature_names)
+                
+                print(f"分组统计量计算完成: Bankrupt=0有{len(bankrupt_0_data)}条样本, Bankrupt=1有{len(bankrupt_1_data)}条样本")
+                
+                # 发送SHAP和统计量结果
+                await websocket.send_text(json.dumps({
+                    "type": "shap_results",
+                    "data": {
+                        "shap_values": shap_values_list,
+                        "feature_names": feature_names,
+                        "base_value": float(base_value),
+                        "stats_bankrupt_0": stats_bankrupt_0,
+                        "stats_bankrupt_1": stats_bankrupt_1
+                    }
+                }))
+                
+                # 发送数据处理状态消息
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "正在处理SHAP结果和统计数据..."
+                }))
+                
+                # 获取前5个最重要的特征
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "正在分析重要特征..."
+                }))
+                
+                top_features = []
+                for i, sample_shap_values in enumerate(shap_values):
+                    feature_shap_value_tuples = []
+                    for j, (feature, shap_val) in enumerate(zip(feature_names, sample_shap_values)):
+                        feature_val = input_data.iloc[i, j] if hasattr(input_data, 'iloc') else None
+                        feature_shap_value_tuples.append((feature, shap_val, feature_val))
+                    
+                    feature_shap_value_tuples.sort(key=lambda x: abs(x[1]), reverse=True)
+                    sample_top_features = [feature for feature, _, _ in feature_shap_value_tuples[:5]]
+                    top_features.extend(sample_top_features)
+                
+                seen = set()
+                top_features = [x for x in top_features if not (x in seen or seen.add(x))]
+                
+                # 发送数据格式化状态消息
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "正在准备LLM分析数据..."
+                }))
+                
+                # 格式化数据准备提交给LLM
+                stats_text = format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_features)
+                shap_text = format_shap_for_llm(shap_values, feature_names, input_data)
+                
+                # 构建LLM提示
+                llm_prompt = f"""
+你是一位专业的数据科学家和机器学习专家。请分析以下SHAP值和特征统计量信息，并提供专业且清晰易懂的解读。
+
+{stats_text}
+{shap_text}
+
+请基于以上信息，提供以下分析：
+1. 对于Bankrupt=0和Bankrupt=1两组样本，哪些特征表现出最显著的差异？
+
+请提供简洁的解读。
+"""
+                
+                # 发送LLM准备状态
+                await websocket.send_text(json.dumps({
+                    "type": "status",
+                    "message": "正在连接LLM模型..."
+                }))
+                
+                # 开始LLM流式解读
+                await websocket.send_text(json.dumps({
+                    "type": "llm_start",
+                    "message": "开始LLM解读..."
+                }))
+                
+                print("正在调用Gemini大模型进行流式解读...")
+                llm_manager = create_llm("gemini")
+                
+                # 记录LLM解读操作开始时间
+                llm_start_time = time.time()
+                print(llm_start_time)
+                # 使用流式响应
+                for chunk in llm_manager.get_streaming_response(
+                    llm_prompt,
+                    system_prompt="你是一位专业的数据科学家和机器学习专家，擅长解释SHAP值和统计分析结果。"
+                ):
+                    # 发送流式内容
+                    await websocket.send_text(json.dumps({
+                        "type": "llm_chunk",
+                        "content": chunk
+                    }))
+                    # 添加小延迟以避免过快发送，确保流式效果
+                    await asyncio.sleep(0.05)
+                    print(chunk, end='', flush=True)
+                
+                # 记录LLM解读操作耗时
+                llm_duration = time.time() - llm_start_time
+                LLM_INTERPRETATION_DURATION.labels(model_type="gemini").observe(llm_duration)
+                
+                # 发送完成消息
+                await websocket.send_text(json.dumps({
+                    "type": "llm_complete",
+                    "message": "LLM解读完成"
+                }))
+                
+                print("Gemini大模型流式解读完成")
+                
+            except Exception as e:
+                error_msg = f"SHAP与统计量分析过程中出错: {str(e)}"
+                print(f"错误: {error_msg}")
+                import traceback
+                traceback.print_exc()
+                await websocket.send_text(json.dumps({
+                    "type": "error",
+                    "message": error_msg
+                }))
+                
+    except WebSocketDisconnect:
+        print("WebSocket连接断开")
+    except Exception as e:
+        print(f"WebSocket错误: {str(e)}")
 
 @app.get("/metrics")
 async def metrics():
