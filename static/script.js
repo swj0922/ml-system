@@ -571,6 +571,7 @@ async function performStreamingShapAnalysis(requestBody) {
         const ws = new WebSocket(wsUrl);
         let shapData = null;
         let llmInterpretationDiv = null;
+        let llmMarkdownContent = ''; // 累积LLM输出的Markdown内容
         
         ws.onopen = function() {
             console.log('WebSocket连接已建立');
@@ -613,7 +614,7 @@ async function performStreamingShapAnalysis(requestBody) {
                         llmDiv.innerHTML = `
                             <div class="prediction-result">
                                 <h3>LLM解读</h3>
-                                <div id="llm-interpretation" style="white-space: pre-line; font-family: monospace; border: 1px solid #ddd; padding: 10px; background-color: #f9f9f9; min-height: 100px;"></div>
+                                <div id="llm-interpretation" class="llm-markdown-content" style="border: 1px solid #ddd; padding: 15px; background-color: #f9f9f9; min-height: 100px; line-height: 1.6;"></div>
                             </div>
                         `;
                         container.appendChild(llmDiv);
@@ -632,9 +633,19 @@ async function performStreamingShapAnalysis(requestBody) {
                 } else if (message.type === 'llm_chunk') {
                     // 接收到LLM流式数据块
                     if (llmInterpretationDiv && message.content) {
-                        // 创建文本节点并追加，实现真正的流式显示
-                        const textNode = document.createTextNode(message.content);
-                        llmInterpretationDiv.appendChild(textNode);
+                        // 累积Markdown内容
+                        llmMarkdownContent += message.content;
+                        
+                        // 解析Markdown并渲染为HTML
+                        try {
+                            const htmlContent = marked.parse(llmMarkdownContent);
+                            llmInterpretationDiv.innerHTML = htmlContent;
+                        } catch (error) {
+                            // 如果Markdown解析失败，回退到纯文本显示
+                            console.warn('Markdown解析失败，使用纯文本显示:', error);
+                            llmInterpretationDiv.textContent = llmMarkdownContent;
+                        }
+                        
                         // 自动滚动到底部
                         llmInterpretationDiv.scrollTop = llmInterpretationDiv.scrollHeight;
                         
