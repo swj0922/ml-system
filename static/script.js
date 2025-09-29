@@ -216,7 +216,7 @@ async function predictManualInput() {
     }
 }
 
-// 显示预测结果
+// 显示基本预测结果（不包含SHAP分析）
 function displayPredictionResults(data) {
     const container = document.getElementById('prediction-results');
     container.innerHTML = '<h2>预测结果</h2>';

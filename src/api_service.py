@@ -22,14 +22,18 @@ from prometheus_client import Counter, Histogram, Gauge, generate_latest, CONTEN
 from datetime import datetime
 
 # 导入大模型配置
-from llm_config import create_llm
+from .llm_config import create_llm
 
 # 定义生命周期管理器
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理器"""
     # 应用启动时加载模型和数据
-    load_model_and_data()
+    success = load_model_and_data()
+    if not success:
+        print("模型和数据加载失败，应用将退出")
+        raise RuntimeError("模型和数据加载失败")
+    
     # 挂载静态文件目录
     static_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'static')
     if os.path.exists(static_dir):
