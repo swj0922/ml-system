@@ -189,6 +189,7 @@ class ShapAnalysisRequest(BaseModel):
             }
         ]
     )
+    model: Optional[str] = Field(default="gemini", example="gemini", description="选择的LLM模型: gemini 或 qwen")
 
 class ShapAnalysisResponse(BaseModel):
     """SHAP分析响应数据模型"""
@@ -884,29 +885,47 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                     "message": "开始LLM解读..."
                 }))
                 
-                print("正在调用Gemini大模型进行流式解读...")
-                llm_manager = create_llm("gemini")
+                # 获取选择的模型
+                selected_model = request.model if hasattr(request, 'model') and request.model else "gemini"
+                print(f"正在调用{selected_model}大模型进行流式解读...")
+                llm_manager = create_llm(selected_model)
                 
                 # 记录LLM解读操作开始时间
                 llm_start_time = time.time()
-                print(llm_start_time)
+                print(f"LLM开始时间: {llm_start_time}")
+                
                 # 使用流式响应
-                for chunk in llm_manager.get_streaming_response(
-                    llm_prompt,
-                    system_prompt="你是一位专业的数据科学家和机器学习专家，擅长解释SHAP值和统计分析结果。"
-                ):
-                    # 发送流式内容
+                try:
+                    chunk_count = 0
+                    for chunk in llm_manager.get_streaming_response(
+                        llm_prompt,
+                        system_prompt="你是一位专业的数据科学家和机器学习专家，擅长解释SHAP值和统计分析结果。"
+                    ):
+                        chunk_count += 1
+                        if chunk_count == 1:
+                            first_chunk_time = time.time()
+                            print(f"首个chunk接收时间: {first_chunk_time}, 延迟: {first_chunk_time - llm_start_time:.2f}秒")
+                        
+                        # 发送流式内容
+                        await websocket.send_text(json.dumps({
+                            "type": "llm_chunk",
+                            "content": chunk
+                        }))
+                        # 减少延迟，从0.05秒改为0.01秒
+                        await asyncio.sleep(0.01)
+                        print(chunk, end='', flush=True)
+                        
+                except Exception as stream_error:
+                    print(f"流式响应错误: {stream_error}")
                     await websocket.send_text(json.dumps({
-                        "type": "llm_chunk",
-                        "content": chunk
+                        "type": "error",
+                        "message": f"流式响应错误: {str(stream_error)}"
                     }))
-                    # 添加小延迟以避免过快发送，确保流式效果
-                    await asyncio.sleep(0.05)
-                    print(chunk, end='', flush=True)
+                    return
                 
                 # 记录LLM解读操作耗时
                 llm_duration = time.time() - llm_start_time
-                LLM_INTERPRETATION_DURATION.labels(model_type="gemini").observe(llm_duration)
+                LLM_INTERPRETATION_DURATION.labels(model_type=selected_model).observe(llm_duration)
                 
                 # 发送完成消息
                 await websocket.send_text(json.dumps({
@@ -914,7 +933,7 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                     "message": "LLM解读完成"
                 }))
                 
-                print("Gemini大模型流式解读完成")
+                print(f"{selected_model}大模型流式解读完成")
             except Exception as e:
                 error_msg = f"SHAP与统计量分析过程中出错: {str(e)}"
                 print(f"错误: {error_msg}")

@@ -70,6 +70,18 @@
                 <label for="shap-stats-sample-count">样本数量:</label>
                 <input type="number" id="shap-stats-sample-count" min="1" max="10" value="1">
             </div>
+            
+            <div class="input-group">
+                <label for="llm-model-select">选择LLM模型:</label>
+                <select id="llm-model-select" class="model-select">
+                    <option value="gemini">Gemini</option>
+                    <option value="qwen">Qwen</option>
+                </select>
+                <small class="model-description">
+                    <span id="model-description-text">Gemini: Google的先进大语言模型，支持多语言和复杂推理</span>
+                </small>
+            </div>
+            
             <button class="btn" onclick="getRandomSampleForShapStats()">获取随机样本</button>
             <button class="btn btn-success" onclick="analyzeRandomSampleWithStats()">分析随机样本</button>
             

@@ -5,7 +5,31 @@ const API_BASE = '';
 document.addEventListener('DOMContentLoaded', function() {
     checkApiStatus();
     getFeatures();
+    initializeModelSelector();
 });
+
+// 初始化模型选择器
+function initializeModelSelector() {
+    const modelSelect = document.getElementById('llm-model-select');
+    const modelDescriptionText = document.getElementById('model-description-text');
+    
+    if (modelSelect && modelDescriptionText) {
+        // 模型描述映射
+        const modelDescriptions = {
+            'gemini': 'Gemini 2.5 Flash: Google的快速响应模型，适合实时分析，支持流式输出',
+            'qwen': 'Qwen: 阿里云的中文优化模型，深度理解中文语境，支持流式输出'
+        };
+        
+        // 监听模型选择变化
+        modelSelect.addEventListener('change', function() {
+            const selectedModel = this.value;
+            modelDescriptionText.textContent = modelDescriptions[selectedModel] || '未知模型';
+        });
+        
+        // 初始化描述
+        modelDescriptionText.textContent = modelDescriptions[modelSelect.value] || '未知模型';
+    }
+}
 
 // 检查API状态
 async function checkApiStatus() {
@@ -543,12 +567,24 @@ async function getShapWithStatsAnalysis(sampleCount, features = null) {
     try {
         showLoading(true);
         
+        // 获取选择的模型
+        const modelSelect = document.getElementById('llm-model-select');
+        const selectedModel = modelSelect ? modelSelect.value : 'gemini';
+        
         let requestBody;
         if (features) {
-            requestBody = { features: features };
+            requestBody = { 
+                features: features,
+                model: selectedModel
+            };
         } else {
-            requestBody = { sample_count: parseInt(sampleCount) };
+            requestBody = { 
+                sample_count: parseInt(sampleCount),
+                model: selectedModel
+            };
         }
+        
+        console.log('选择的模型:', selectedModel);
         
         // 使用WebSocket进行流式分析
         await performStreamingShapAnalysis(requestBody);

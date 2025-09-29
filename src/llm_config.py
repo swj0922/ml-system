@@ -1,5 +1,7 @@
 from abc import ABC, abstractmethod
 from openai import OpenAI
+from google import genai
+from google.genai import types
 
 
 class BaseLLM(ABC):
@@ -79,16 +81,13 @@ class GeminiLLM(BaseLLM):
         获取Gemini客户端
         
         Returns:
-            OpenAI: 配置好的Gemini客户端实例
+            genai.Client: 配置好的Gemini客户端实例
         """
-        return OpenAI(
-            api_key=self.api_key,
-            base_url=self.base_url
-        )
+        return genai.Client(api_key=self.api_key)
     
     def get_response(self, prompt, system_prompt="You are a helpful assistant."):
         """
-        使用Gemini模型获取回复（流式输出）
+        使用Gemini模型获取回复（非流式）
         
         Args:
             prompt (str): 用户输入的提示
@@ -99,27 +98,16 @@ class GeminiLLM(BaseLLM):
         """
         client = self.get_client()
         
-        response = client.chat.completions.create(
+        # 将系统提示和用户提示合并
+        combined_prompt = f"{system_prompt}\n\n{prompt}"
+        
+        response = client.models.generate_content(
             model="gemini-2.5-flash",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            stream=True  # 启用流式输出
+            contents=[combined_prompt],
+            config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
         )
-
-        collected_messages = []
-        for chunk in response:
-            chunk_message = chunk.choices[0].delta.content
-            if chunk_message:
-                collected_messages.append(chunk_message)
-                # 实时打印流式输出（可选）
-                print(chunk_message, end='', flush=True)
         
-        # 换行，因为流式输出没有换行
-        print()
-        
-        return "".join(collected_messages)
+        return response.text
     
     def get_streaming_response(self, prompt, system_prompt="You are a helpful assistant."):
         """
@@ -134,19 +122,38 @@ class GeminiLLM(BaseLLM):
         """
         client = self.get_client()
         
-        response = client.chat.completions.create(
-            model="gemini-2.5-flash",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            stream=True  # 启用流式输出
-        )
+        try:
+            # 将系统提示和用户提示合并
+            combined_prompt = f"{system_prompt}\n\n{prompt}"
+            
+            response = client.models.generate_content_stream(
+                model="gemini-2.5-flash",
+                contents=[combined_prompt],
+                config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
+            )
 
-        for chunk in response:
-            chunk_message = chunk.choices[0].delta.content
-            if chunk_message:
-                yield chunk_message
+            for chunk in response:
+                if hasattr(chunk, 'text') and chunk.text:
+                    yield chunk.text
+        except Exception as e:
+            print(f"Gemini流式输出错误: {e}")
+            # 如果流式输出失败，回退到非流式输出并手动分割
+            try:
+                full_response = self.get_response(prompt, system_prompt)
+                # 手动分割响应
+                if any('\u4e00' <= char <= '\u9fff' for char in full_response):
+                    # 中文文本，按字符分割
+                    for char in full_response:
+                        if char.strip():
+                            yield char
+                else:
+                    # 英文文本，按词分割
+                    words = full_response.split()
+                    for word in words:
+                        yield word + " "
+            except Exception as fallback_error:
+                print(f"Gemini回退方案也失败: {fallback_error}")
+                yield "流式输出失败"
 
 
 class QwenLLM(BaseLLM):
@@ -230,9 +237,10 @@ class QwenLLM(BaseLLM):
         )
         
         for chunk in response:
-            chunk_message = chunk.choices[0].delta.content
-            if chunk_message:
-                yield chunk_message
+            if chunk.choices and len(chunk.choices) > 0:
+                chunk_message = chunk.choices[0].delta.content
+                if chunk_message:
+                    yield chunk_message
 
 
 # 工厂函数，用于创建不同类型的LLM实例
