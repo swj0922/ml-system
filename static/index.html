@@ -19,19 +19,17 @@
             <p><strong>预测端点:</strong> <span class="api-endpoint">POST /predict</span></p>
             <p><strong>特征列表端点:</strong> <span class="api-endpoint">GET /features</span></p>
             <p><strong>随机样本端点:</strong> <span class="api-endpoint">GET /sample?count=1</span></p>
-            <p><strong>SHAP分析端点:</strong> <span class="api-endpoint">POST /shap-analysis</span></p>
-            <p><strong>SHAP与统计量分析端点:</strong> <span class="api-endpoint">POST /shap-with-stats-analysis</span></p>
+            <p><strong>SHAP分析端点:</strong> <span class="api-endpoint">POST /shap-with-stats-analysis</span></p>
         </div>
     </div>
 
     <div class="container">
-        <h2>预测功能</h2>
+        <h2>功能选择</h2>
         
         <div class="tab">
             <button class="tablinks active" onclick="openTab(event, 'random-sample')">随机样本预测</button>
             <button class="tablinks" onclick="openTab(event, 'manual-input')">手动输入预测</button>
-            <button class="tablinks" onclick="openTab(event, 'shap-analysis')">SHAP分析</button>
-            <button class="tablinks" onclick="openTab(event, 'shap-stats-analysis')">SHAP与统计量分析</button>
+            <button class="tablinks" onclick="openTab(event, 'shap-stats-analysis')">SHAP分析</button>
         </div>
         
         <div id="random-sample" class="tabcontent" style="display: block;">
@@ -50,20 +48,7 @@
             <button class="btn btn-success" onclick="predictManualInput()">预测手动输入</button>
         </div>
         
-        <div id="shap-analysis" class="tabcontent">
-            <div class="input-group">
-                <label for="shap-sample-count">样本数量:</label>
-                <input type="number" id="shap-sample-count" min="1" max="10" value="1">
-            </div>
-            <button class="btn" onclick="getRandomSampleForShap()">获取随机样本</button>
-            <button class="btn btn-success" onclick="analyzeRandomSample()">分析随机样本</button>
-            
-            <div id="shap-random-sample-data"></div>
-            
-            <h3>手动输入分析</h3>
-            <div id="shap-feature-inputs"></div>
-            <button class="btn btn-success" onclick="analyzeManualInput()">分析手动输入</button>
-        </div>
+
         
         <div id="shap-stats-analysis" class="tabcontent">
             <div class="input-group">

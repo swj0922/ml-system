@@ -52,7 +52,6 @@ async function getFeatures() {
         const data = await response.json();
         featureNames = data.features;
         createFeatureInputs();
-        createShapFeatureInputs();
         createShapStatsFeatureInputs();
     } catch (error) {
         showError('获取特征列表失败: ' + error.message);
@@ -83,29 +82,7 @@ function createFeatureInputs() {
     });
 }
 
-// 创建SHAP特征输入表单
-function createShapFeatureInputs() {
-    const container = document.getElementById('shap-feature-inputs');
-    container.innerHTML = '';
-    
-    featureNames.forEach(feature => {
-        const inputGroup = document.createElement('div');
-        inputGroup.className = 'input-group';
-        
-        const label = document.createElement('label');
-        label.textContent = feature;
-        
-        const input = document.createElement('input');
-        input.type = 'number';
-        input.step = 'any';
-        input.id = `shap-feature-${feature}`;
-        input.placeholder = `输入 ${feature} 的值`;
-        
-        inputGroup.appendChild(label);
-        inputGroup.appendChild(input);
-        container.appendChild(inputGroup);
-    });
-}
+
 
 // 创建SHAP与统计量分析特征输入表单
 function createShapStatsFeatureInputs() {
@@ -196,9 +173,6 @@ async function predictRandomSample() {
         
         const data = await response.json();
         displayPredictionResults(data);
-        
-        // 获取SHAP分析
-        await getShapAnalysis(count);
     } catch (error) {
         showError('预测失败: ' + error.message);
     } finally {
@@ -235,9 +209,6 @@ async function predictManualInput() {
         
         const data = await response.json();
         displayPredictionResults(data);
-        
-        // 获取SHAP分析
-        await getShapAnalysis(1, [features]);
     } catch (error) {
         showError('预测失败: ' + error.message);
     } finally {
@@ -271,91 +242,9 @@ function displayPredictionResults(data) {
     });
 }
 
-// 获取SHAP分析
-async function getShapAnalysis(sampleCount, features = null) {
-    try {
-        showLoading(true);
-        
-        let requestBody;
-        if (features) {
-            requestBody = { features: features };
-        } else {
-            requestBody = { sample_count: parseInt(sampleCount) };
-        }
-        
-        const response = await fetch(`${API_BASE}/shap-analysis`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(requestBody)
-        });
-        
-        const data = await response.json();
-        displayShapResults(data);
-    } catch (error) {
-        showError('SHAP分析失败: ' + error.message);
-    } finally {
-        showLoading(false);
-    }
-}
 
-// 显示SHAP分析结果
-function displayShapResults(data) {
-    const container = document.getElementById('prediction-results');
-    
-    // 如果容器中没有预测结果，先添加一个标题
-    if (!container.innerHTML.includes('预测结果')) {
-        container.innerHTML = '<h2>SHAP分析结果</h2>';
-    }
-    
-    data.shap_values.forEach((shapValues, index) => {
-        const resultDiv = document.createElement('div');
-        resultDiv.className = 'result-container';
-        
-        let html = `
-            <div class="prediction-result">
-                <h3>样本 ${index + 1} 的SHAP分析</h3>
-                <p><strong>基准值:</strong> ${data.base_value.toFixed(4)}</p>
-            </div>
-        `;
-        
-        // 添加SHAP解释
-        html += '<div class="feature-importance">';
-        html += '<h4>特征重要性 (SHAP值)</h4>';
-        
-        // 计算每个特征的SHAP值
-        const featureImportance = [];
-        
-        data.feature_names.forEach((name, i) => {
-            featureImportance.push({
-                name: name,
-                value: shapValues[i]
-            });
-        });
-        
-        // 按SHAP值绝对值排序
-        featureImportance.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
-        
-        // 显示前10个最重要的特征
-        featureImportance.slice(0, 10).forEach(feature => {
-            const isPositive = feature.value >= 0;
-            const barWidth = Math.min(Math.abs(feature.value) * 100, 300); // 限制最大宽度
-            
-            html += `
-                <div class="feature-bar">
-                    <span class="feature-name">${feature.name}:</span>
-                    <span class="shap-bar ${isPositive ? 'positive' : 'negative'}" style="width: ${barWidth}px;"></span>
-                    <span class="shap-value">${feature.value.toFixed(4)}</span>
-                </div>
-            `;
-        });
-        
-        html += '</div>';
-        resultDiv.innerHTML = html;
-        container.appendChild(resultDiv);
-    });
-}
+
+
 
 // 切换标签页
 function openTab(evt, tabName) {
@@ -390,91 +279,13 @@ function showError(message) {
     }, 5000);
 }
 
-// 获取SHAP分析的随机样本
-async function getRandomSampleForShap() {
-    const count = document.getElementById('shap-sample-count').value;
-    
-    try {
-        showLoading(true);
-        const response = await fetch(`${API_BASE}/sample?count=${count}`);
-        const data = await response.json();
-        
-        displayShapRandomSample(data.samples);
-    } catch (error) {
-        showError('获取随机样本失败: ' + error.message);
-    } finally {
-        showLoading(false);
-    }
-}
 
-// 显示SHAP分析的随机样本
-function displayShapRandomSample(samples) {
-    const container = document.getElementById('shap-random-sample-data');
-    container.innerHTML = '<h3>随机样本数据:</h3>';
-    
-    samples.forEach((sample, index) => {
-        const sampleDiv = document.createElement('div');
-        sampleDiv.className = 'result-container';
-        
-        let html = `<h4>样本 ${index + 1}</h4>`;
-        html += '<table style="width: 100%; border-collapse: collapse;">';
-        
-        // 只显示前10个特征，避免表格过长
-        const featuresToShow = Object.keys(sample).slice(0, 10);
-        featuresToShow.forEach(feature => {
-            if (feature !== 'Bankrupt') {  // 排除目标变量
-                html += `<tr><td style="padding: 5px; border: 1px solid #ddd;">${feature}</td><td style="padding: 5px; border: 1px solid #ddd;">${sample[feature]}</td></tr>`;
-            }
-        });
-        
-        if (Object.keys(sample).length > 11) {  // 如果有超过10个特征
-            html += `<tr><td colspan="2" style="padding: 5px; border: 1px solid #ddd; text-align: center;">... 还有 ${Object.keys(sample).length - 11} 个特征</td></tr>`;
-        }
-        
-        html += '</table>';
-        sampleDiv.innerHTML = html;
-        container.appendChild(sampleDiv);
-    });
-}
 
-// 分析随机样本
-async function analyzeRandomSample() {
-    const count = document.getElementById('shap-sample-count').value;
-    
-    try {
-        showLoading(true);
-        await getShapAnalysis(count);
-    } catch (error) {
-        showError('SHAP分析失败: ' + error.message);
-    } finally {
-        showLoading(false);
-    }
-}
 
-// 分析手动输入
-async function analyzeManualInput() {
-    const features = {};
-    
-    featureNames.forEach(feature => {
-        const input = document.getElementById(`shap-feature-${feature}`);
-        const value = parseFloat(input.value);
-        
-        if (isNaN(value)) {
-            throw new Error(`请输入有效的 ${feature} 值`);
-        }
-        
-        features[feature] = value;
-    });
-    
-    try {
-        showLoading(true);
-        await getShapAnalysis(1, [features]);
-    } catch (error) {
-        showError('SHAP分析失败: ' + error.message);
-    } finally {
-        showLoading(false);
-    }
-}
+
+
+
+
 
 // 获取SHAP与统计量分析的随机样本
 async function getRandomSampleForShapStats() {
@@ -641,10 +452,58 @@ async function performStreamingShapAnalysis(requestBody) {
                     
                     // 异步处理SHAP结果显示，避免阻塞后续消息
                     setTimeout(() => {
-                        displayShapResults(shapData);
+                        // 显示SHAP分析结果
+                        const container = document.getElementById('prediction-results');
+                        container.innerHTML = '<h2>SHAP与统计量分析结果</h2>';
+                        
+                        shapData.shap_values.forEach((shapValues, index) => {
+                            const resultDiv = document.createElement('div');
+                            resultDiv.className = 'result-container';
+                            
+                            let html = `
+                                <div class="prediction-result">
+                                    <h3>样本 ${index + 1} 的SHAP分析</h3>
+                                    <p><strong>基准值:</strong> ${shapData.base_value.toFixed(4)}</p>
+                                </div>
+                            `;
+                            
+                            // 添加SHAP解释
+                            html += '<div class="feature-importance">';
+                            html += '<h4>特征重要性 (SHAP值)</h4>';
+                            
+                            // 计算每个特征的SHAP值
+                            const featureImportance = [];
+                            
+                            shapData.feature_names.forEach((name, i) => {
+                                featureImportance.push({
+                                    name: name,
+                                    value: shapValues[i]
+                                });
+                            });
+                            
+                            // 按SHAP值绝对值排序
+                            featureImportance.sort((a, b) => Math.abs(b.value) - Math.abs(a.value));
+                            
+                            // 显示前10个最重要的特征
+                            featureImportance.slice(0, 10).forEach(feature => {
+                                const isPositive = feature.value >= 0;
+                                const barWidth = Math.min(Math.abs(feature.value) * 100, 300); // 限制最大宽度
+                                
+                                html += `
+                                    <div class="feature-bar">
+                                        <span class="feature-name">${feature.name}:</span>
+                                        <span class="shap-bar ${isPositive ? 'positive' : 'negative'}" style="width: ${barWidth}px;"></span>
+                                        <span class="shap-value">${feature.value.toFixed(4)}</span>
+                                    </div>
+                                `;
+                            });
+                            
+                            html += '</div>';
+                            resultDiv.innerHTML = html;
+                            container.appendChild(resultDiv);
+                        });
                         
                         // 准备LLM解读容器
-                        const container = document.getElementById('prediction-results');
                         const llmDiv = document.createElement('div');
                         llmDiv.className = 'result-container';
                         llmDiv.innerHTML = `
