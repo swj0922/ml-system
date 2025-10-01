@@ -63,8 +63,10 @@ class GeminiLLM(BaseLLM):
     """
     Gemini模型实现类
     """
-    
-    def __init__(self, api_key="AIzaSyD36taFUaT7sv0iKwzLyuFeqZiZPoQtSnA"):
+    # AIzaSyBCaevYiLbu8kE5VdPYZA8w8mUCWX9zwZA
+    # AIzaSyD36taFUaT7sv0iKwzLyuFeqZiZPoQtSnA
+    # AIzaSyB-AwMVI5PYGihROiUME3DOz7_lkk0Tovw
+    def __init__(self, api_key="AIzaSyB-AwMVI5PYGihROiUME3DOz7_lkk0Tovw"):
         """
         初始化Gemini模型
         
@@ -131,29 +133,16 @@ class GeminiLLM(BaseLLM):
                 contents=[combined_prompt],
                 config=types.GenerateContentConfig(thinking_config=types.ThinkingConfig(thinking_budget=0))
             )
-
+            
             for chunk in response:
                 if hasattr(chunk, 'text') and chunk.text:
                     yield chunk.text
         except Exception as e:
-            print(f"Gemini流式输出错误: {e}")
-            # 如果流式输出失败，回退到非流式输出并手动分割
-            try:
-                full_response = self.get_response(prompt, system_prompt)
-                # 手动分割响应
-                if any('\u4e00' <= char <= '\u9fff' for char in full_response):
-                    # 中文文本，按字符分割
-                    for char in full_response:
-                        if char.strip():
-                            yield char
-                else:
-                    # 英文文本，按词分割
-                    words = full_response.split()
-                    for word in words:
-                        yield word + " "
-            except Exception as fallback_error:
-                print(f"Gemini回退方案也失败: {fallback_error}")
-                yield "流式输出失败"
+            import traceback
+            error_details = traceback.format_exc()
+            print(f"Gemini调用失败: {e}")
+            print(f"错误详情: {error_details}")
+            yield f"Gemini流式输出失败: {str(e)}"
 
 
 class QwenLLM(BaseLLM):
@@ -270,10 +259,11 @@ def create_llm(model_type, **kwargs):
 if __name__ == "__main__":
     # 使用Gemini模型
     gemini_llm = create_llm("gemini")
-    response = gemini_llm.get_response("Explain to me how AI works")
+    response = gemini_llm.get_streaming_response("Explain to me how AI works")
     print("Gemini回复:", response)
-    
+    '''
     # 使用Qwen模型
     qwen_llm = create_llm("qwen")
     response = qwen_llm.get_response("请解释一下人工智能是如何工作的")
     print("Qwen回复:", response)
+    '''

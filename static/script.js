@@ -161,6 +161,7 @@ async function predictRandomSample() {
     
     try {
         showLoading(true);
+        // 发送HTTP请求到后端API
         const response = await fetch(`${API_BASE}/predict`, {
             method: 'POST',
             headers: {
@@ -243,21 +244,19 @@ function displayPredictionResults(data) {
 }
 
 
-
-
-
 // 切换标签页
 function openTab(evt, tabName) {
     const tabcontent = document.getElementsByClassName("tabcontent");
+    // 先隐藏所有内容
     for (let i = 0; i < tabcontent.length; i++) {
         tabcontent[i].style.display = "none";
     }
-    
+    // 移除所有标签的选中（active）状态
     const tablinks = document.getElementsByClassName("tablinks");
     for (let i = 0; i < tablinks.length; i++) {
         tablinks[i].className = tablinks[i].className.replace(" active", "");
     }
-    
+    // 再显示选中的内容
     document.getElementById(tabName).style.display = "block";
     evt.currentTarget.className += " active";
 }
@@ -278,13 +277,6 @@ function showError(message) {
         errorElement.style.display = 'none';
     }, 5000);
 }
-
-
-
-
-
-
-
 
 
 // 获取SHAP与统计量分析的随机样本
@@ -415,24 +407,29 @@ async function performStreamingShapAnalysis(requestBody) {
         const wsPort = window.location.port || (window.location.protocol === 'https:' ? '443' : '80');
         const wsUrl = `${wsProtocol}//${wsHost}:${wsPort}/ws/shap-with-stats-analysis`;
         
+        // 根据URL创建WebSocket连接
         const ws = new WebSocket(wsUrl);
+
+        // 初始化变量
         let shapData = null;
         let llmInterpretationDiv = null;
         let llmMarkdownContent = ''; // 累积LLM输出的Markdown内容
         
         ws.onopen = function() {
             console.log('WebSocket连接已建立');
-            // 发送请求数据
+            // 向服务器发送请求数据
             ws.send(JSON.stringify(requestBody));
         };
         
+        // 当WebSocket连接接收到来自服务器的消息时，这个函数会被自动调用
+        // event是从服务器发来的数据
         ws.onmessage = function(event) {
             try {
                 const message = JSON.parse(event.data);
                 console.log('收到WebSocket消息:', message.type, message);
                 
                 if (message.type === 'status') {
-                    // 更新状态显示
+                    // 更新前端状态显示
                     console.log('状态更新:', message.message, '时间:', new Date().toLocaleTimeString());
                     const loadingElement = document.querySelector('.loading');
                     if (loadingElement) {
@@ -534,6 +531,7 @@ async function performStreamingShapAnalysis(requestBody) {
                         // 解析Markdown并渲染为HTML
                         try {
                             const htmlContent = marked.parse(llmMarkdownContent);
+                            // 实时显示LLM输出的内容
                             llmInterpretationDiv.innerHTML = htmlContent;
                         } catch (error) {
                             // 如果Markdown解析失败，回退到纯文本显示
@@ -552,6 +550,7 @@ async function performStreamingShapAnalysis(requestBody) {
                     // LLM解读完成
                     console.log('LLM解读完成');
                     ws.close();
+                    // 调用 resolve() 告诉 Promise 该异步操作已成功完成
                     resolve();
                     
                 } else if (message.type === 'error') {

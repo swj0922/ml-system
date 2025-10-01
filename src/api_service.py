@@ -465,7 +465,7 @@ async def predict(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
-
+# todo
 @app.post("/shap-analysis", response_model=ShapAnalysisResponse)
 async def shap_analysis(
     request: ShapAnalysisRequest = Body(
@@ -915,12 +915,14 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                             "type": "llm_chunk",
                             "content": chunk
                         }))
-                        # 减少延迟，从0.05秒改为0.01秒
                         await asyncio.sleep(0.01)
                         print(chunk, end='', flush=True)
                         
                 except Exception as stream_error:
+                    import traceback
+                    error_details = traceback.format_exc()
                     print(f"流式响应错误: {stream_error}")
+                    print(f"错误详情: {error_details}")
                     await websocket.send_text(json.dumps({
                         "type": "error",
                         "message": f"流式响应错误: {str(stream_error)}"
