@@ -871,21 +871,6 @@ function displayPDPResults(data) {
     const container = document.getElementById('pdp-results');
     
     const html = `
-        <div class="pdp-info">
-            <h5>部分依赖图分析结果</h5>
-            <p><strong>分析特征数量:</strong> ${data.selected_features.length}</p>
-            <p><strong>网格分辨率:</strong> ${data.pdp_data.grid_resolution || 100}</p>
-            <p><strong>计算时间:</strong> ${data.calculation_time.toFixed(3)} 秒</p>
-            <p><strong>计算方式:</strong> ${data.use_multiprocessing ? '多进程' : '单进程'}</p>
-            ${data.use_multiprocessing && data.n_processes ? `<p><strong>进程数:</strong> ${data.n_processes}</p>` : ''}
-            <div class="feature-list">
-                ${data.selected_features.map(feature => 
-                    `<span class="feature-tag">${feature}</span>`
-                ).join('')}
-            </div>
-            ${currentPDPSample ? '<p><strong>样本标注:</strong> 图中高亮点显示当前样本的特征值位置</p>' : ''}
-        </div>
-        
         <div class="pdp-plot-container">
             <h4>部分依赖图</h4>
             <img src="data:image/png;base64,${data.plot_image}" alt="部分依赖图" />
@@ -896,7 +881,7 @@ function displayPDPResults(data) {
             <ul>
                 <li><strong>X轴:</strong> 特征值范围</li>
                 <li><strong>Y轴:</strong> 预测概率的变化</li>
-                <li><strong>蓝色曲线:</strong> 部分依赖关系</li>
+                <li><strong>绿色曲线:</strong> 部分依赖关系</li>
                 ${currentPDPSample ? '<li><strong>红色点:</strong> 当前样本的特征值位置</li>' : ''}
                 <li><strong>解释:</strong> 曲线显示了每个特征对模型预测结果的独立影响</li>
             </ul>
