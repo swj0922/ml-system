@@ -14,7 +14,6 @@ import base64
 import io
 import json
 from sklearn.inspection import partial_dependence
-from sklearn.ensemble import RandomForestClassifier
 import joblib
 
 # 设置中文字体
@@ -195,6 +194,7 @@ class PartialDependenceAnalyzer:
                 ax.legend(fontsize=8)
             
             # 设置标题和标签
+            ax.set_title(f'{features[idx]}', fontsize=10, fontweight='semibold', color='#34495E')
             ax.set_xlabel('feature value', fontsize=10, fontweight='semibold', color='#34495E')
             ax.set_ylabel('pdp', fontsize=10, fontweight='semibold', color='#34495E')
             
@@ -233,75 +233,7 @@ class PartialDependenceAnalyzer:
         plt.close()
         
         return image_base64
-    
-    def get_feature_importance_for_pdp(self, top_n: int = 9) -> List[str]:
-        """
-        获取用于PDP分析的重要特征
-        
-        Args:
-            top_n: 返回的特征数量
-            
-        Returns:
-            重要特征列表
-        """
-        try:
-            # 如果模型有feature_importances_属性
-            if hasattr(self.model, 'feature_importances_'):
-                importances = self.model.feature_importances_
-                feature_importance = list(zip(self.feature_names, importances))
-                feature_importance.sort(key=lambda x: x[1], reverse=True)
-                return [feature for feature, _ in feature_importance[:top_n]]
-            else:
-                # 如果没有特征重要性，返回前n个特征
-                return self.feature_names[:top_n]
-        except Exception as e:
-            print(f"获取特征重要性时出错: {e}")
-            return self.feature_names[:top_n]
-    
-    def analyze_feature_interactions(self, 
-                                   feature_pairs: List[Tuple[str, str]], 
-                                   grid_resolution: int = 50) -> Dict[str, Any]:
-        """
-        分析特征交互的部分依赖
-        
-        Args:
-            feature_pairs: 特征对列表
-            grid_resolution: 网格分辨率
-            
-        Returns:
-            特征交互分析结果
-        """
-        results = {}
-        
-        for feature1, feature2 in feature_pairs:
-            if feature1 not in self.feature_names or feature2 not in self.feature_names:
-                continue
-                
-            try:
-                feature_indices = [
-                    self.feature_names.index(feature1),
-                    self.feature_names.index(feature2)
-                ]
-                
-                # 计算二维部分依赖
-                pd_result = partial_dependence(
-                    self.model, 
-                    self.X_train, 
-                    features=feature_indices,
-                    grid_resolution=grid_resolution
-                )
-                
-                results[f"{feature1}_vs_{feature2}"] = {
-                    'partial_dependence': pd_result['average'].tolist(),
-                    'grid_values': [grid.tolist() for grid in pd_result['grid_values']],
-                    'features': [feature1, feature2]
-                }
-                
-            except Exception as e:
-                print(f"计算特征交互 {feature1} vs {feature2} 时出错: {e}")
-                continue
-                
-        return results
+
 
 def load_pdp_analyzer(model_path: str, data_path: str, feature_names: List[str]) -> PartialDependenceAnalyzer:
     """
