@@ -13,12 +13,65 @@ from typing import List, Dict, Any, Tuple, Optional, Union
 import base64
 import io
 import json
+import time
 from sklearn.inspection import partial_dependence
 import joblib
+from multiprocessing import Pool, cpu_count
+import functools
 
 # 设置中文字体
 plt.rcParams['font.family'] = 'SimHei'
 plt.rcParams['axes.unicode_minus'] = False
+
+def _calculate_single_feature_pdp(args):
+    """
+    计算单个特征的部分依赖（用于多进程）
+    
+    Args:
+        args: 包含计算参数的元组
+        
+    Returns:
+        包含特征名和PDP数据的元组
+    """
+    feature, feature_idx, model, X_train, grid_resolution, percentiles = args
+    
+    try:
+        # 计算特征值范围
+        feature_values = X_train.iloc[:, feature_idx]
+        min_val = np.percentile(feature_values, percentiles[0] * 100)
+        max_val = np.percentile(feature_values, percentiles[1] * 100)
+        
+        # 计算部分依赖
+        pd_result = partial_dependence(
+            model, 
+            X_train, 
+            features=[feature_idx],
+            grid_resolution=grid_resolution,
+            percentiles=percentiles
+        )
+        
+        # 提取结果
+        partial_dependence_values = pd_result['average'][0]
+        grid_values = pd_result['grid_values'][0]
+        
+        result = {
+            'grid_values': grid_values.tolist(),
+            'partial_dependence': partial_dependence_values.tolist(),
+            'feature_range': [float(min_val), float(max_val)],
+            'feature_stats': {
+                'mean': float(feature_values.mean()),
+                'std': float(feature_values.std()),
+                'min': float(feature_values.min()),
+                'max': float(feature_values.max()),
+                'median': float(feature_values.median())
+            }
+        }
+        
+        return (feature, result)
+        
+    except Exception as e:
+        print(f"计算特征 {feature} 的部分依赖时出错: {e}")
+        return (feature, None)
 
 class PartialDependenceAnalyzer:
     """部分依赖图分析器"""
@@ -40,7 +93,9 @@ class PartialDependenceAnalyzer:
     def calculate_partial_dependence(self, 
                                    features: List[str], 
                                    grid_resolution: int = 100,
-                                   percentiles: Tuple[float, float] = (0.05, 0.95)) -> Dict[str, Any]:
+                                   percentiles: Tuple[float, float] = (0.05, 0.95),
+                                   use_multiprocessing: bool = False,
+                                   n_processes: Optional[int] = None) -> Tuple[Dict[str, Any], float]:
         """
         计算指定特征的部分依赖
         
@@ -48,10 +103,38 @@ class PartialDependenceAnalyzer:
             features: 要计算部分依赖的特征列表
             grid_resolution: 网格分辨率
             percentiles: 特征值的百分位数范围
+            use_multiprocessing: 是否使用多进程
+            n_processes: 进程数，如果为None则使用CPU核心数
             
         Returns:
-            包含部分依赖数据的字典
+            包含部分依赖数据的字典和计算时间
         """
+        start_time = time.time()
+        
+        # 过滤有效特征
+        valid_features = [f for f in features if f in self.feature_names]
+        if not valid_features:
+            return {}, 0.0
+        
+        if use_multiprocessing and len(valid_features) > 1:
+            # 使用多进程计算
+            results = self._calculate_pdp_multiprocess(
+                valid_features, grid_resolution, percentiles, n_processes
+            )
+        else:
+            # 使用单进程计算
+            results = self._calculate_pdp_singleprocess(
+                valid_features, grid_resolution, percentiles
+            )
+        
+        calculation_time = time.time() - start_time
+        return results, calculation_time
+    
+    def _calculate_pdp_singleprocess(self, 
+                                   features: List[str], 
+                                   grid_resolution: int,
+                                   percentiles: Tuple[float, float]) -> Dict[str, Any]:
+        """单进程计算PDP"""
         results = {}
         
         for feature in features:
@@ -64,9 +147,6 @@ class PartialDependenceAnalyzer:
             feature_values = self.X_train[feature]
             min_val = np.percentile(feature_values, percentiles[0] * 100)
             max_val = np.percentile(feature_values, percentiles[1] * 100)
-            
-            # 创建网格点
-            grid_values = np.linspace(min_val, max_val, grid_resolution)
             
             # 计算部分依赖
             try:
@@ -101,12 +181,52 @@ class PartialDependenceAnalyzer:
                 
         return results
     
+    def _calculate_pdp_multiprocess(self, 
+                                  features: List[str], 
+                                  grid_resolution: int,
+                                  percentiles: Tuple[float, float],
+                                  n_processes: Optional[int] = None) -> Dict[str, Any]:
+        """多进程计算PDP"""
+        if n_processes is None:
+            n_processes = min(cpu_count(), len(features))
+        
+        # 准备参数
+        args_list = []
+        for feature in features:
+            if feature in self.feature_names:
+                feature_idx = self.feature_names.index(feature)
+                args_list.append((
+                    feature, feature_idx, self.model, self.X_train, 
+                    grid_resolution, percentiles
+                ))
+        
+        results = {}
+        
+        try:
+            # 使用进程池计算
+            with Pool(processes=n_processes) as pool:
+                pool_results = pool.map(_calculate_single_feature_pdp, args_list)
+            
+            # 整理结果
+            for feature, result in pool_results:
+                if result is not None:
+                    results[feature] = result
+                    
+        except Exception as e:
+            print(f"多进程计算PDP时出错: {e}")
+            # 如果多进程失败，回退到单进程
+            results = self._calculate_pdp_singleprocess(features, grid_resolution, percentiles)
+        
+        return results
+    
     def create_pdp_plots(self, 
                         features: List[str], 
                         sample_data: Optional[Dict[str, float]] = None,
                         grid_resolution: int = 100,
                         figsize: Tuple[int, int] = (15, 10),
-                        pdp_data: Optional[Dict[str, Any]] = None) -> str:
+                        pdp_data: Optional[Dict[str, Any]] = None,
+                        use_multiprocessing: bool = False,
+                        n_processes: Optional[int] = None) -> Tuple[str, float]:
         """
         创建部分依赖图
         
@@ -116,19 +236,25 @@ class PartialDependenceAnalyzer:
             grid_resolution: 网格分辨率
             figsize: 图形大小
             pdp_data: 可选的预计算PDP数据，如果提供则不重新计算
+            use_multiprocessing: 是否使用多进程
+            n_processes: 进程数
             
         Returns:
-            Base64编码的图像字符串
+            Base64编码的图像字符串和计算时间
         """
         # 限制最多9个特征
         features = features[:9]
         
         # 使用预计算的数据或重新计算部分依赖
         if pdp_data is None:
-            pdp_data = self.calculate_partial_dependence(features, grid_resolution)
+            pdp_data, calculation_time = self.calculate_partial_dependence(
+                features, grid_resolution, use_multiprocessing=use_multiprocessing, 
+                n_processes=n_processes
+            )
         else:
             # 过滤出需要的特征数据
             pdp_data = {feature: pdp_data[feature] for feature in features if feature in pdp_data}
+            calculation_time = 0.0
         
         if not pdp_data:
             raise ValueError("无法计算任何特征的部分依赖")
@@ -238,7 +364,7 @@ class PartialDependenceAnalyzer:
         image_base64 = base64.b64encode(buffer.getvalue()).decode()
         plt.close()
         
-        return image_base64
+        return image_base64, calculation_time
 
 
 def load_pdp_analyzer(model_path: str, data_path: str, feature_names: List[str]) -> PartialDependenceAnalyzer:

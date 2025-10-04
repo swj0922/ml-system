@@ -647,6 +647,20 @@ document.addEventListener('DOMContentLoaded', function() {
     setTimeout(() => {
         initializePDPFeatures();
         getFeatureImportance();
+        
+        // 添加多进程选项的事件监听器
+        const useMultiprocessingCheckbox = document.getElementById('use-multiprocessing');
+        const processCountGroup = document.getElementById('process-count-group');
+        
+        if (useMultiprocessingCheckbox && processCountGroup) {
+            useMultiprocessingCheckbox.addEventListener('change', function() {
+                if (this.checked) {
+                    processCountGroup.style.display = 'block';
+                } else {
+                    processCountGroup.style.display = 'none';
+                }
+            });
+        }
     }, 1000); // 等待特征列表加载完成
 });
 
@@ -818,11 +832,15 @@ async function generatePDP() {
         showLoading(true);
         
         const gridResolution = parseInt(document.getElementById('pdp-grid-resolution').value) || 100;
+        const useMultiprocessing = document.getElementById('use-multiprocessing').checked;
+        const processCount = parseInt(document.getElementById('process-count').value) || null;
         
         const requestBody = {
             features: selectedFeatures,
             sample_data: currentPDPSample,
-            grid_resolution: gridResolution
+            grid_resolution: gridResolution,
+            use_multiprocessing: useMultiprocessing,
+            n_processes: useMultiprocessing ? processCount : null
         };
         
         const response = await fetch(`${API_BASE}/pdp-analysis`, {
@@ -857,6 +875,9 @@ function displayPDPResults(data) {
             <h5>部分依赖图分析结果</h5>
             <p><strong>分析特征数量:</strong> ${data.selected_features.length}</p>
             <p><strong>网格分辨率:</strong> ${data.pdp_data.grid_resolution || 100}</p>
+            <p><strong>计算时间:</strong> ${data.calculation_time.toFixed(3)} 秒</p>
+            <p><strong>计算方式:</strong> ${data.use_multiprocessing ? '多进程' : '单进程'}</p>
+            ${data.use_multiprocessing && data.n_processes ? `<p><strong>进程数:</strong> ${data.n_processes}</p>` : ''}
             <div class="feature-list">
                 ${data.selected_features.map(feature => 
                     `<span class="feature-tag">${feature}</span>`

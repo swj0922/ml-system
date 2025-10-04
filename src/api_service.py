@@ -235,17 +235,33 @@ class PDPRequest(BaseModel):
         le=200,
         description="网格分辨率，控制PDP曲线的平滑度"
     )
+    use_multiprocessing: Optional[bool] = Field(
+        default=False,
+        description="是否使用多进程计算PDP"
+    )
+    n_processes: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=16,
+        description="进程数，如果为None则使用CPU核心数"
+    )
 
 class PDPResponse(BaseModel):
-    """部分依赖图响应模型"""
+    """PDP分析响应数据模型"""
     pdp_data: Dict[str, Any] = Field(description="部分依赖图数据")
     plot_image: str = Field(description="Base64编码的PDP图像")
     selected_features: List[str] = Field(description="实际分析的特征列表")
+    calculation_time: float = Field(description="计算时间（秒）")
+    use_multiprocessing: bool = Field(description="是否使用了多进程")
+    n_processes: Optional[int] = Field(description="使用的进程数")
 
 class PDPDataResponse(BaseModel):
-    """部分依赖图数据响应模型"""
+    """PDP数据响应模型"""
     pdp_data: Dict[str, Any] = Field(description="部分依赖图数据")
     selected_features: List[str] = Field(description="实际分析的特征列表")
+    calculation_time: float = Field(description="计算时间（秒）")
+    use_multiprocessing: bool = Field(description="是否使用了多进程")
+    n_processes: Optional[int] = Field(description="使用的进程数")
 
 def get_probability_range(probability):
     """
@@ -686,23 +702,30 @@ async def pdp_analysis(request: PDPRequest):
             )
         
         # 计算PDP数据
-        pdp_data = pdp_analyzer.calculate_partial_dependence(
+        pdp_data, calculation_time = pdp_analyzer.calculate_partial_dependence(
             features=features_to_analyze,
-            grid_resolution=request.grid_resolution
+            grid_resolution=request.grid_resolution,
+            use_multiprocessing=request.use_multiprocessing,
+            n_processes=request.n_processes
         )
         
         # 生成PDP图像（使用已计算的数据，避免重复计算）
-        plot_image = pdp_analyzer.create_pdp_plots(
+        plot_image, plot_calculation_time = pdp_analyzer.create_pdp_plots(
             features=features_to_analyze,
             sample_data=request.sample_data,
             grid_resolution=request.grid_resolution,
-            pdp_data=pdp_data
+            pdp_data=pdp_data,
+            use_multiprocessing=request.use_multiprocessing,
+            n_processes=request.n_processes
         )
         
         return PDPResponse(
             pdp_data=pdp_data,
             plot_image=plot_image,
-            selected_features=features_to_analyze
+            selected_features=features_to_analyze,
+            calculation_time=calculation_time,
+            use_multiprocessing=request.use_multiprocessing or False,
+            n_processes=request.n_processes
         )
         
     except Exception as e:
@@ -747,14 +770,19 @@ async def pdp_data(request: PDPRequest):
             )
         
         # 计算PDP数据
-        pdp_data = pdp_analyzer.calculate_partial_dependence(
+        pdp_data, calculation_time = pdp_analyzer.calculate_partial_dependence(
             features=features_to_analyze,
-            grid_resolution=request.grid_resolution
+            grid_resolution=request.grid_resolution,
+            use_multiprocessing=request.use_multiprocessing,
+            n_processes=request.n_processes
         )
         
         return PDPDataResponse(
             pdp_data=pdp_data,
-            selected_features=features_to_analyze
+            selected_features=features_to_analyze,
+            calculation_time=calculation_time,
+            use_multiprocessing=request.use_multiprocessing or False,
+            n_processes=request.n_processes
         )
         
     except Exception as e:

@@ -82,12 +82,28 @@
         </div>
 
         <div id="pdp-analysis" class="tabcontent">
-            <h3>特征选择</h3>
+            <h3>计算设置</h3>
             <div class="input-group">
                 <label for="pdp-grid-resolution">网格分辨率:</label>
                 <input type="number" id="pdp-grid-resolution" min="20" max="200" value="100">
                 <small>控制PDP曲线的平滑度（20-200）</small>
             </div>
+            
+            <div class="input-group">
+                <label for="use-multiprocessing" class="checkbox-label">
+                    <input type="checkbox" id="use-multiprocessing">
+                    使用多进程计算
+                </label>
+                <small>启用多进程可以加速PDP计算</small>
+            </div>
+            
+            <div class="input-group" id="process-count-group" style="display: none;">
+                <label for="process-count">进程数:</label>
+                <input type="number" id="process-count" min="1" max="16" value="4">
+                <small>使用的进程数量（1-16，留空则使用CPU核心数）</small>
+            </div>
+            
+            <h3>特征选择</h3>
             
             <div class="feature-selection-container">
                 <div class="feature-selection-header">
