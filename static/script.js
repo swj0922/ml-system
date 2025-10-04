@@ -127,6 +127,9 @@ async function getRandomSample() {
 
 // 显示随机样本
 function displayRandomSample(samples) {
+    // 存储样本数据到全局变量
+    globalSampleData = samples;
+    
     const container = document.getElementById('random-sample-data');
     container.innerHTML = '<h3>随机样本数据:</h3>';
     
@@ -150,6 +153,10 @@ function displayRandomSample(samples) {
         }
         
         html += '</table>';
+        
+        // 添加"用于PDP分析"按钮
+        html += `<button onclick="useSampleForPDP(${index})" class="btn" style="margin-top: 10px;">用于PDP分析</button>`;
+        
         sampleDiv.innerHTML = html;
         container.appendChild(sampleDiv);
     });
@@ -298,6 +305,9 @@ async function getRandomSampleForShapStats() {
 
 // 显示SHAP与统计量分析的随机样本
 function displayShapStatsRandomSample(samples) {
+    // 存储样本数据到全局变量
+    globalSampleData = samples;
+    
     const container = document.getElementById('shap-stats-random-sample-data');
     container.innerHTML = '<h3>随机样本数据:</h3>';
     
@@ -321,6 +331,10 @@ function displayShapStatsRandomSample(samples) {
         }
         
         html += '</table>';
+        
+        // 添加"用于PDP分析"按钮
+        html += `<button onclick="useSampleForPDP(${index})" class="btn" style="margin-top: 10px;">用于PDP分析</button>`;
+        
         sampleDiv.innerHTML = html;
         container.appendChild(sampleDiv);
     });
@@ -574,4 +588,299 @@ async function performStreamingShapAnalysis(requestBody) {
             console.log('WebSocket连接已关闭');
         };
     });
+}
+
+// ==================== PDP功能相关函数 ====================
+
+// PDP相关变量
+let featureImportance = {};
+let currentPDPSample = null;
+
+// 全局样本数据存储，用于跨标签页共享
+let globalSampleData = null;
+
+// 使用选中的样本进行PDP分析
+function useSampleForPDP(sampleIndex) {
+    if (!globalSampleData || sampleIndex >= globalSampleData.length) {
+        showError('样本数据不可用');
+        return;
+    }
+    
+    const sample = globalSampleData[sampleIndex];
+    // 移除目标变量
+    const sampleFeatures = { ...sample };
+    delete sampleFeatures.Bankrupt;
+    
+    // 切换到PDP分析标签页
+    const pdpTab = document.querySelector('[onclick="openTab(event, \'pdp-analysis\')"]');
+    if (pdpTab) {
+        pdpTab.click();
+    }
+    
+    // 设置当前PDP样本
+    currentPDPSample = sampleFeatures;
+    
+    // 显示样本数据
+    displayPDPSample(sampleFeatures);
+    
+    // 显示提示信息
+    const infoDiv = document.createElement('div');
+    infoDiv.className = 'info-box';
+    infoDiv.innerHTML = `<p><strong>已选择样本 ${sampleIndex + 1} 用于PDP分析</strong></p><p>该样本的特征值将在PDP图中以红色标注显示。</p>`;
+    
+    const container = document.getElementById('pdp-sample-data');
+    container.insertBefore(infoDiv, container.firstChild);
+    
+    // 3秒后移除提示信息
+    setTimeout(() => {
+        if (infoDiv.parentNode) {
+            infoDiv.parentNode.removeChild(infoDiv);
+        }
+    }, 3000);
+}
+
+
+
+// 页面加载时初始化PDP功能
+document.addEventListener('DOMContentLoaded', function() {
+    // 在现有的初始化函数中添加PDP初始化
+    setTimeout(() => {
+        initializePDPFeatures();
+        getFeatureImportance();
+    }, 1000); // 等待特征列表加载完成
+});
+
+// 初始化PDP特征选择列表
+async function initializePDPFeatures() {
+    if (featureNames.length === 0) {
+        setTimeout(initializePDPFeatures, 500);
+        return;
+    }
+    
+    const container = document.getElementById('feature-selection-list');
+    container.innerHTML = '';
+    
+    featureNames.forEach((feature, index) => {
+        const featureItem = document.createElement('div');
+        featureItem.className = 'feature-item';
+        
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.id = `pdp-feature-${index}`;
+        checkbox.value = feature;
+        checkbox.addEventListener('change', updateFeatureSelection);
+        
+        const label = document.createElement('label');
+        label.htmlFor = `pdp-feature-${index}`;
+        label.textContent = feature;
+        
+        featureItem.appendChild(checkbox);
+        featureItem.appendChild(label);
+        container.appendChild(featureItem);
+    });
+}
+
+// 获取特征重要性
+async function getFeatureImportance() {
+    try {
+        const response = await fetch(`${API_BASE}/feature-importance`);
+        const data = await response.json();
+        featureImportance = data.feature_importance;
+    } catch (error) {
+        console.error('获取特征重要性失败:', error);
+    }
+}
+
+// 更新特征选择状态
+function updateFeatureSelection() {
+    const checkboxes = document.querySelectorAll('#feature-selection-list input[type="checkbox"]');
+    const selectedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+    
+    // 更新选择计数
+    document.getElementById('selected-feature-count').textContent = `已选择: ${selectedCount}/9`;
+    
+    // 如果选择超过9个，禁用其他复选框
+    if (selectedCount >= 9) {
+        checkboxes.forEach(cb => {
+            if (!cb.checked) {
+                cb.disabled = true;
+            }
+        });
+    } else {
+        checkboxes.forEach(cb => {
+            cb.disabled = false;
+        });
+    }
+    
+    // 更新选中项的样式
+    checkboxes.forEach(cb => {
+        const featureItem = cb.closest('.feature-item');
+        if (cb.checked) {
+            featureItem.classList.add('selected');
+        } else {
+            featureItem.classList.remove('selected');
+        }
+    });
+}
+
+// 随机选择特征
+function selectRandomFeatures() {
+    // 清空当前选择
+    clearFeatureSelection();
+    
+    // 获取所有可用特征
+    const checkboxes = document.querySelectorAll('#feature-selection-list input[type="checkbox"]');
+    const allFeatures = Array.from(checkboxes).map(cb => cb.value);
+    
+    // 随机打乱特征数组并选择前9个
+    const shuffledFeatures = allFeatures.sort(() => Math.random() - 0.5);
+    const selectedFeatures = shuffledFeatures.slice(0, 9);
+    
+    // 勾选随机选择的特征
+    checkboxes.forEach(cb => {
+        if (selectedFeatures.includes(cb.value)) {
+            cb.checked = true;
+        }
+    });
+    
+    updateFeatureSelection();
+}
+
+// 清空特征选择
+function clearFeatureSelection() {
+    const checkboxes = document.querySelectorAll('#feature-selection-list input[type="checkbox"]');
+    checkboxes.forEach(cb => {
+        cb.checked = false;
+        cb.disabled = false;
+    });
+    updateFeatureSelection();
+}
+
+// 获取选中的特征
+function getSelectedFeatures() {
+    const checkboxes = document.querySelectorAll('#feature-selection-list input[type="checkbox"]:checked');
+    return Array.from(checkboxes).map(cb => cb.value);
+}
+
+// 获取随机样本用于PDP分析
+async function getRandomSampleForPDP() {
+    try {
+        showLoading(true);
+        const response = await fetch(`${API_BASE}/sample?count=1`);
+        const data = await response.json();
+        
+        if (data.samples && data.samples.length > 0) {
+            currentPDPSample = data.samples[0];
+            displayPDPSample(currentPDPSample);
+        }
+    } catch (error) {
+        showError('获取随机样本失败: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// 显示PDP样本数据
+function displayPDPSample(sample) {
+    const container = document.getElementById('pdp-sample-data');
+    
+    const html = `
+        <h4>当前样本数据</h4>
+        <div class="sample-highlight">
+            <h5>样本特征值</h5>
+            <p>该样本的特征值将在PDP图中以高亮点标注</p>
+            <div style="max-height: 200px; overflow-y: auto; font-size: 12px;">
+                ${Object.entries(sample).map(([key, value]) => 
+                    `<div><strong>${key}:</strong> ${typeof value === 'number' ? value.toFixed(6) : value}</div>`
+                ).join('')}
+            </div>
+        </div>
+    `;
+    
+    container.innerHTML = html;
+}
+
+// 生成部分依赖图
+async function generatePDP() {
+    const selectedFeatures = getSelectedFeatures();
+    
+    if (selectedFeatures.length === 0) {
+        showError('请至少选择一个特征');
+        return;
+    }
+    
+    if (selectedFeatures.length > 9) {
+        showError('最多只能选择9个特征');
+        return;
+    }
+    
+    try {
+        showLoading(true);
+        
+        const gridResolution = parseInt(document.getElementById('pdp-grid-resolution').value) || 100;
+        
+        const requestBody = {
+            features: selectedFeatures,
+            sample_data: currentPDPSample,
+            grid_resolution: gridResolution
+        };
+        
+        const response = await fetch(`${API_BASE}/pdp-analysis`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody)
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json();
+            throw new Error(errorData.detail || '生成PDP失败');
+        }
+        
+        const data = await response.json();
+        displayPDPResults(data);
+        
+    } catch (error) {
+        showError('生成部分依赖图失败: ' + error.message);
+    } finally {
+        showLoading(false);
+    }
+}
+
+// 显示PDP分析结果
+function displayPDPResults(data) {
+    const container = document.getElementById('pdp-results');
+    
+    const html = `
+        <div class="pdp-info">
+            <h5>部分依赖图分析结果</h5>
+            <p><strong>分析特征数量:</strong> ${data.selected_features.length}</p>
+            <p><strong>网格分辨率:</strong> ${data.pdp_data.grid_resolution || 100}</p>
+            <div class="feature-list">
+                ${data.selected_features.map(feature => 
+                    `<span class="feature-tag">${feature}</span>`
+                ).join('')}
+            </div>
+            ${currentPDPSample ? '<p><strong>样本标注:</strong> 图中高亮点显示当前样本的特征值位置</p>' : ''}
+        </div>
+        
+        <div class="pdp-plot-container">
+            <h4>部分依赖图</h4>
+            <img src="data:image/png;base64,${data.plot_image}" alt="部分依赖图" />
+        </div>
+        
+        <div class="pdp-info">
+            <h5>图表说明</h5>
+            <ul>
+                <li><strong>X轴:</strong> 特征值范围</li>
+                <li><strong>Y轴:</strong> 预测概率的变化</li>
+                <li><strong>蓝色曲线:</strong> 部分依赖关系</li>
+                ${currentPDPSample ? '<li><strong>红色点:</strong> 当前样本的特征值位置</li>' : ''}
+                <li><strong>解释:</strong> 曲线显示了每个特征对模型预测结果的独立影响</li>
+            </ul>
+        </div>
+    `;
+    
+    container.innerHTML = html;
 }

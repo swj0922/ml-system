@@ -11,3 +11,5 @@ prometheus-client
 openai
 websockets
 google-genai
+matplotlib
+seaborn

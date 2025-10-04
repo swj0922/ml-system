@@ -24,6 +24,9 @@ from datetime import datetime
 # 导入大模型配置
 from .llm_config import create_llm
 
+# 导入部分依赖图分析模块
+from .partial_dependence import PartialDependenceAnalyzer
+
 # 定义生命周期管理器
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -215,6 +218,35 @@ class HealthResponse(BaseModel):
     status: str
     message: str
 
+class PDPRequest(BaseModel):
+    """部分依赖图请求模型"""
+    features: Optional[List[str]] = Field(
+        default=None, 
+        example=["Net profit before tax/Paid-in capital", "Cash/Total Assets"],
+        description="要分析的特征列表，最多9个特征。如果为空，将自动选择重要特征"
+    )
+    sample_data: Optional[Dict[str, float]] = Field(
+        default=None,
+        description="可选的样本数据，用于在PDP图中标注样本点"
+    )
+    grid_resolution: Optional[int] = Field(
+        default=100,
+        ge=20,
+        le=200,
+        description="网格分辨率，控制PDP曲线的平滑度"
+    )
+
+class PDPResponse(BaseModel):
+    """部分依赖图响应模型"""
+    pdp_data: Dict[str, Any] = Field(description="部分依赖图数据")
+    plot_image: str = Field(description="Base64编码的PDP图像")
+    selected_features: List[str] = Field(description="实际分析的特征列表")
+
+class PDPDataResponse(BaseModel):
+    """部分依赖图数据响应模型"""
+    pdp_data: Dict[str, Any] = Field(description="部分依赖图数据")
+    selected_features: List[str] = Field(description="实际分析的特征列表")
+
 def get_probability_range(probability):
     """
     根据概率值确定概率范围
@@ -252,10 +284,11 @@ explainer = None
 feature_names = None
 test_data = None
 train_data = None
+pdp_analyzer = None
 
 def load_model_and_data():
     """加载模型和测试数据"""
-    global model, explainer, feature_names, test_data, train_data
+    global model, explainer, feature_names, test_data, train_data, pdp_analyzer
     
     try:
         # 模型文件路径
@@ -313,6 +346,11 @@ def load_model_and_data():
         print("测试SHAP计算功能...")
         shap_values = explainer.shap_values(sample_data)
         print(f"SHAP值计算成功，形状: {np.array(shap_values).shape}")
+        
+        # 创建部分依赖图分析器
+        print("正在创建部分依赖图分析器...")
+        pdp_analyzer = PartialDependenceAnalyzer(model, feature_names, train_data)
+        print("部分依赖图分析器创建成功")
         
         print("模型和数据加载成功")
         return True
@@ -611,6 +649,141 @@ async def get_sample(count: int = 1):
     samples = test_data.iloc[sample_indices].to_dict('records')
     
     return {"samples": samples}
+
+@app.post("/pdp-analysis", response_model=PDPResponse)
+async def pdp_analysis(request: PDPRequest):
+    """
+    生成部分依赖图分析
+    
+    参数:
+    - features: 要分析的特征列表（最多9个）
+    - sample_data: 可选的样本数据，用于在图中标注
+    - grid_resolution: 网格分辨率
+    
+    返回:
+    - PDP数据和Base64编码的图像
+    """
+    if pdp_analyzer is None:
+        raise HTTPException(status_code=500, detail="PDP分析器未初始化")
+    
+    try:
+        # 获取要分析的特征
+        features_to_analyze = request.features
+        if features_to_analyze is None:
+            # 如果没有指定特征，使用特征重要性选择前9个
+            feature_importance = pdp_analyzer.get_feature_importance()
+            features_to_analyze = list(feature_importance.keys())[:9]
+        else:
+            # 限制最多9个特征
+            features_to_analyze = features_to_analyze[:9]
+        
+        # 验证特征是否存在
+        invalid_features = [f for f in features_to_analyze if f not in feature_names]
+        if invalid_features:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"无效的特征名称: {invalid_features}"
+            )
+        
+        # 计算PDP数据
+        pdp_data = pdp_analyzer.calculate_partial_dependence(
+            features=features_to_analyze,
+            grid_resolution=request.grid_resolution
+        )
+        
+        # 生成PDP图像
+        plot_image = pdp_analyzer.create_pdp_plots(
+            features=features_to_analyze,
+            sample_data=request.sample_data,
+            grid_resolution=request.grid_resolution
+        )
+        
+        return PDPResponse(
+            pdp_data=pdp_data,
+            plot_image=plot_image,
+            selected_features=features_to_analyze
+        )
+        
+    except Exception as e:
+        error_msg = f"PDP分析失败: {str(e)}"
+        print(f"Error in PDP analysis: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/pdp-data", response_model=PDPDataResponse)
+async def pdp_data(request: PDPRequest):
+    """
+    获取部分依赖图数据（不生成图像）
+    
+    参数:
+    - features: 要分析的特征列表（最多9个）
+    - grid_resolution: 网格分辨率
+    
+    返回:
+    - PDP数据
+    """
+    if pdp_analyzer is None:
+        raise HTTPException(status_code=500, detail="PDP分析器未初始化")
+    
+    try:
+        # 获取要分析的特征
+        features_to_analyze = request.features
+        if features_to_analyze is None:
+            # 如果没有指定特征，使用特征重要性选择前9个
+            feature_importance = pdp_analyzer.get_feature_importance()
+            features_to_analyze = list(feature_importance.keys())[:9]
+        else:
+            # 限制最多9个特征
+            features_to_analyze = features_to_analyze[:9]
+        
+        # 验证特征是否存在
+        invalid_features = [f for f in features_to_analyze if f not in feature_names]
+        if invalid_features:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"无效的特征名称: {invalid_features}"
+            )
+        
+        # 计算PDP数据
+        pdp_data = pdp_analyzer.calculate_partial_dependence(
+            features=features_to_analyze,
+            grid_resolution=request.grid_resolution
+        )
+        
+        return PDPDataResponse(
+            pdp_data=pdp_data,
+            selected_features=features_to_analyze
+        )
+        
+    except Exception as e:
+        error_msg = f"PDP数据获取失败: {str(e)}"
+        print(f"Error in PDP data: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/feature-importance")
+async def get_feature_importance():
+    """
+    获取特征重要性排序
+    
+    返回:
+    - 特征重要性字典，按重要性降序排列
+    """
+    if pdp_analyzer is None:
+        raise HTTPException(status_code=500, detail="PDP分析器未初始化")
+    
+    try:
+        feature_importance = pdp_analyzer.get_feature_importance()
+        return {"feature_importance": feature_importance}
+        
+    except Exception as e:
+        error_msg = f"特征重要性获取失败: {str(e)}"
+        print(f"Error in feature importance: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
 
 def calculate_feature_stats(data, feature_names):
     """

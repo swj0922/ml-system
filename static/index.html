@@ -31,6 +31,7 @@
             <button class="tablinks active" onclick="openTab(event, 'random-sample')">随机样本预测</button>
             <button class="tablinks" onclick="openTab(event, 'manual-input')">手动输入预测</button>
             <button class="tablinks" onclick="openTab(event, 'shap-stats-analysis')">SHAP分析</button>
+            <button class="tablinks" onclick="openTab(event, 'pdp-analysis')">部分依赖图</button>
         </div>
         
         <div id="random-sample" class="tabcontent" style="display: block;">
@@ -78,6 +79,42 @@
             <button class="btn btn-success" onclick="analyzeManualInputWithStats()">分析手动输入</button>
             
             <div id="llm-interpretation-container"></div>
+        </div>
+
+        <div id="pdp-analysis" class="tabcontent">
+            <h3>特征选择</h3>
+            <div class="input-group">
+                <label for="pdp-grid-resolution">网格分辨率:</label>
+                <input type="number" id="pdp-grid-resolution" min="20" max="200" value="100">
+                <small>控制PDP曲线的平滑度（20-200）</small>
+            </div>
+            
+            <div class="feature-selection-container">
+                <div class="feature-selection-header">
+                    <h4>选择特征（最多9个）</h4>
+                    <div class="feature-selection-controls">
+                        <button class="btn btn-secondary" onclick="selectRandomFeatures()">随机选择特征</button>
+                        <button class="btn btn-secondary" onclick="clearFeatureSelection()">清空选择</button>
+                        <span id="selected-feature-count">已选择: 0/9</span>
+                    </div>
+                </div>
+                <div id="feature-selection-list" class="feature-selection-list">
+                    <!-- 特征选择列表将在这里动态生成 -->
+                </div>
+            </div>
+            
+            <div class="pdp-controls">
+                <button class="btn btn-success" onclick="generatePDP()">生成部分依赖图</button>
+                <button class="btn" onclick="getRandomSampleForPDP()">获取随机样本</button>
+            </div>
+            
+            <div id="pdp-sample-data" class="sample-data-container">
+                <!-- 随机样本数据将在这里显示 -->
+            </div>
+            
+            <div id="pdp-results" class="pdp-results-container">
+                <!-- PDP分析结果将在这里显示 -->
+            </div>
         </div>
         
         <div class="loading" id="loading">
