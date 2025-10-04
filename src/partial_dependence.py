@@ -105,7 +105,8 @@ class PartialDependenceAnalyzer:
                         features: List[str], 
                         sample_data: Optional[Dict[str, float]] = None,
                         grid_resolution: int = 100,
-                        figsize: Tuple[int, int] = (15, 10)) -> str:
+                        figsize: Tuple[int, int] = (15, 10),
+                        pdp_data: Optional[Dict[str, Any]] = None) -> str:
         """
         创建部分依赖图
         
@@ -114,6 +115,7 @@ class PartialDependenceAnalyzer:
             sample_data: 可选的样本数据，用于在图上标注
             grid_resolution: 网格分辨率
             figsize: 图形大小
+            pdp_data: 可选的预计算PDP数据，如果提供则不重新计算
             
         Returns:
             Base64编码的图像字符串
@@ -121,8 +123,12 @@ class PartialDependenceAnalyzer:
         # 限制最多9个特征
         features = features[:9]
         
-        # 计算部分依赖
-        pdp_data = self.calculate_partial_dependence(features, grid_resolution)
+        # 使用预计算的数据或重新计算部分依赖
+        if pdp_data is None:
+            pdp_data = self.calculate_partial_dependence(features, grid_resolution)
+        else:
+            # 过滤出需要的特征数据
+            pdp_data = {feature: pdp_data[feature] for feature in features if feature in pdp_data}
         
         if not pdp_data:
             raise ValueError("无法计算任何特征的部分依赖")

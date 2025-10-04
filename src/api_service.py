@@ -691,11 +691,12 @@ async def pdp_analysis(request: PDPRequest):
             grid_resolution=request.grid_resolution
         )
         
-        # 生成PDP图像
+        # 生成PDP图像（使用已计算的数据，避免重复计算）
         plot_image = pdp_analyzer.create_pdp_plots(
             features=features_to_analyze,
             sample_data=request.sample_data,
-            grid_resolution=request.grid_resolution
+            grid_resolution=request.grid_resolution,
+            pdp_data=pdp_data
         )
         
         return PDPResponse(
