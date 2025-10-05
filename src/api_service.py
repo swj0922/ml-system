@@ -263,6 +263,36 @@ class PDPDataResponse(BaseModel):
     use_multiprocessing: bool = Field(description="是否使用了多进程")
     n_processes: Optional[int] = Field(description="使用的进程数")
 
+class ModelInfo(BaseModel):
+    """模型信息模型"""
+    key: str = Field(description="模型键名")
+    name: str = Field(description="模型显示名称")
+    description: str = Field(description="模型描述")
+    file: str = Field(description="模型文件名")
+    is_available: bool = Field(description="模型是否可用")
+    is_current: bool = Field(description="是否为当前使用的模型")
+
+class ModelsResponse(BaseModel):
+    """可用模型列表响应模型"""
+    models: List[ModelInfo] = Field(description="可用模型列表")
+    current_model: str = Field(description="当前使用的模型键名")
+
+class SwitchModelResponse(BaseModel):
+    """切换模型响应模型"""
+    message: str = Field(description="操作结果消息")
+    current_model: str = Field(description="当前模型键名")
+    previous_model: Optional[str] = Field(description="之前的模型键名")
+
+class CurrentModelResponse(BaseModel):
+    """当前模型信息响应模型"""
+    key: str = Field(description="模型键名")
+    name: str = Field(description="模型显示名称")
+    description: str = Field(description="模型描述")
+    file: str = Field(description="模型文件名")
+    feature_count: int = Field(description="特征数量")
+    test_data_count: int = Field(description="测试数据条数")
+    train_data_count: int = Field(description="训练数据条数")
+
 def get_probability_range(probability):
     """
     根据概率值确定概率范围
@@ -301,20 +331,60 @@ feature_names = None
 test_data = None
 train_data = None
 pdp_analyzer = None
+current_model_name = "xgboost_binned_model"  # 默认模型
 
-def load_model_and_data():
-    """加载模型和测试数据"""
-    global model, explainer, feature_names, test_data, train_data, pdp_analyzer
+# 模型配置映射
+MODEL_CONFIG = {
+    "logistic_model": {
+        "file": "logistic_model.joblib",
+        "name": "逻辑回归模型",
+        "description": "基于逻辑回归算法的二分类模型，适用于线性可分的数据"
+    },
+    "rf_model": {
+        "file": "rf_model.joblib", 
+        "name": "随机森林模型",
+        "description": "基于随机森林算法的集成学习模型，具有良好的泛化能力"
+    },
+    "xgb_model": {
+        "file": "xgb_model.joblib",
+        "name": "XGBoost模型",
+        "description": "基于梯度提升决策树的高性能机器学习模型"
+    },
+    "xgboost_binned_model": {
+        "file": "xgboost_binned_model.joblib",
+        "name": "XGBoost分箱模型", 
+        "description": "使用分箱特征工程的XGBoost模型，提高了模型的稳定性和解释性"
+    }
+}
+
+def get_data_files_for_model(model_name):
+    """获取binned数据文件路径（所有模型统一使用binned数据）"""
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    test_data_path = os.path.join(base_dir, 'data', 'binned_test_data.csv')
+    train_data_path = os.path.join(base_dir, 'data', 'binned_train_data.csv')
+    
+    return test_data_path, train_data_path
+
+def load_model_and_data(model_name=None):
+    """加载指定模型和对应数据"""
+    global model, explainer, feature_names, test_data, train_data, pdp_analyzer, current_model_name
+    
+    if model_name is None:
+        model_name = current_model_name
     
     try:
+        # 检查模型是否存在于配置中
+        if model_name not in MODEL_CONFIG:
+            print(f"错误: 未知的模型名称: {model_name}")
+            return False
+        
+        config = MODEL_CONFIG[model_name]
+        
         # 模型文件路径
-        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', 'xgboost_binned_model.joblib')
+        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', config["file"])
         
-        # 测试数据文件路径
-        test_data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'binned_test_data.csv')
-        
-        # 训练数据文件路径
-        train_data_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'data', 'binned_train_data.csv')
+        # 获取对应的数据文件路径
+        test_data_path, train_data_path = get_data_files_for_model(model_name)
         
         # 检查文件是否存在
         if not os.path.exists(model_path):
@@ -328,8 +398,9 @@ def load_model_and_data():
             return False
         
         # 加载模型
-        print("正在加载模型...")
+        print(f"正在加载模型: {config['name']} ({config['file']})...")
         model = joblib.load(model_path)
+        current_model_name = model_name
         print("模型加载成功")
         
         # 加载测试数据
@@ -348,7 +419,23 @@ def load_model_and_data():
         
         # 创建SHAP解释器
         print("正在创建SHAP解释器...")
-        explainer = shap.TreeExplainer(model)
+        model_type = type(model).__name__
+        print(f"模型类型: {model_type}")
+        
+        if 'LogisticRegression' in model_type:
+            # 逻辑回归模型使用LinearExplainer
+            explainer = shap.LinearExplainer(model, train_data.iloc[:, :-1])
+            print("使用LinearExplainer创建SHAP解释器")
+        elif any(tree_type in model_type for tree_type in ['XGB', 'RandomForest', 'GradientBoosting', 'DecisionTree']):
+            # 基于树的模型使用TreeExplainer
+            explainer = shap.TreeExplainer(model)
+            print("使用TreeExplainer创建SHAP解释器")
+        else:
+            # 其他模型使用KernelExplainer（通用但较慢）
+            background_data = shap.sample(train_data.iloc[:, :-1], 100)
+            explainer = shap.KernelExplainer(model.predict_proba, background_data)
+            print("使用KernelExplainer创建SHAP解释器")
+        
         print("SHAP解释器创建成功")
         
         # 测试模型预测功能
@@ -368,14 +455,13 @@ def load_model_and_data():
         pdp_analyzer = PartialDependenceAnalyzer(model, feature_names, train_data)
         print("部分依赖图分析器创建成功")
         
-        print("模型和数据加载成功")
+        print(f"模型 {config['name']} 和数据加载成功")
         return True
     except Exception as e:
         print(f"加载模型和数据时出错: {e}")
         import traceback
         traceback.print_exc()
         return False
-
 
 
 @app.get("/")
@@ -685,13 +771,6 @@ async def pdp_analysis(request: PDPRequest):
     try:
         # 获取要分析的特征
         features_to_analyze = request.features
-        if features_to_analyze is None:
-            # 如果没有指定特征，使用特征重要性选择前9个
-            feature_importance = pdp_analyzer.get_feature_importance()
-            features_to_analyze = list(feature_importance.keys())[:9]
-        else:
-            # 限制最多9个特征
-            features_to_analyze = features_to_analyze[:9]
         
         # 验证特征是否存在
         invalid_features = [f for f in features_to_analyze if f not in feature_names]
@@ -788,28 +867,6 @@ async def pdp_data(request: PDPRequest):
     except Exception as e:
         error_msg = f"PDP数据获取失败: {str(e)}"
         print(f"Error in PDP data: {error_msg}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=error_msg)
-
-@app.get("/feature-importance")
-async def get_feature_importance():
-    """
-    获取特征重要性排序
-    
-    返回:
-    - 特征重要性字典，按重要性降序排列
-    """
-    if pdp_analyzer is None:
-        raise HTTPException(status_code=500, detail="PDP分析器未初始化")
-    
-    try:
-        feature_importance = pdp_analyzer.get_feature_importance()
-        return {"feature_importance": feature_importance}
-        
-    except Exception as e:
-        error_msg = f"特征重要性获取失败: {str(e)}"
-        print(f"Error in feature importance: {error_msg}")
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
@@ -922,7 +979,6 @@ def format_shap_for_llm(shap_values, feature_names, input_data):
         formatted_text += "\n"
     
     return formatted_text
-
 
 
 @app.websocket("/ws/shap-with-stats-analysis")
@@ -1156,6 +1212,81 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
         print("WebSocket连接断开")
     except Exception as e:
         print(f"WebSocket错误: {str(e)}")
+
+@app.get("/models", response_model=ModelsResponse)
+async def get_available_models():
+    """获取可用模型列表"""
+    models_info = []
+    for model_key, config in MODEL_CONFIG.items():
+        model_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'models', config["file"])
+        test_data_path, train_data_path = get_data_files_for_model(model_key)
+        
+        # 检查文件是否存在
+        is_available = (
+            os.path.exists(model_path) and 
+            os.path.exists(test_data_path) and 
+            os.path.exists(train_data_path)
+        )
+        
+        models_info.append({
+            "key": model_key,
+            "name": config["name"],
+            "description": config["description"],
+            "file": config["file"],
+            "is_available": is_available,
+            "is_current": model_key == current_model_name
+        })
+    
+    return {
+        "models": models_info,
+        "current_model": current_model_name
+    }
+
+@app.post("/switch-model", response_model=SwitchModelResponse)
+async def switch_model(model_key: str = Body(..., embed=True)):
+    """切换模型"""
+    if model_key not in MODEL_CONFIG:
+        raise HTTPException(status_code=400, detail=f"未知的模型名称: {model_key}")
+    
+    if model_key == current_model_name:
+        return {
+            "message": f"当前已经是模型 {MODEL_CONFIG[model_key]['name']}",
+            "current_model": current_model_name
+        }
+    
+    try:
+        success = load_model_and_data(model_key)
+        if success:
+            return {
+                "message": f"成功切换到模型 {MODEL_CONFIG[model_key]['name']}",
+                "current_model": current_model_name,
+                "previous_model": model_key if model_key != current_model_name else None
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"模型 {model_key} 加载失败")
+    except Exception as e:
+        error_msg = f"切换模型时出错: {str(e)}"
+        print(f"错误: {error_msg}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.get("/current-model", response_model=CurrentModelResponse)
+async def get_current_model():
+    """获取当前使用的模型信息"""
+    if current_model_name not in MODEL_CONFIG:
+        raise HTTPException(status_code=500, detail="当前模型配置无效")
+    
+    config = MODEL_CONFIG[current_model_name]
+    return {
+        "key": current_model_name,
+        "name": config["name"],
+        "description": config["description"],
+        "file": config["file"],
+        "feature_count": len(feature_names) if feature_names else 0,
+        "test_data_count": len(test_data) if test_data is not None else 0,
+        "train_data_count": len(train_data) if train_data is not None else 0
+    }
 
 @app.get("/metrics")
 async def metrics():

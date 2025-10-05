@@ -16,6 +16,14 @@
         <h2>API信息</h2>
         <div class="api-info">
             <p><strong>服务状态:</strong> <span id="api-status">检查中...</span></p>
+            <p><strong>当前模型:</strong> <span id="current-model">加载中...</span></p>
+            <div class="model-selector-group">
+                <label for="model-selector"><strong>选择模型:</strong></label>
+                <select id="model-selector" onchange="switchModel()">
+                    <option value="">加载中...</option>
+                </select>
+                <span id="model-switch-status" class="status-message"></span>
+            </div>
             <p><strong>API文档:</strong> <a href="/docs" target="_blank">Swagger UI</a></p>
             <p><strong>预测端点:</strong> <span class="api-endpoint">POST /predict</span></p>
             <p><strong>特征列表端点:</strong> <span class="api-endpoint">GET /features</span></p>

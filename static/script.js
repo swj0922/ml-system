@@ -4,11 +4,151 @@ const API_BASE = '';
 // 页面加载时检查API状态并获取特征列表
 document.addEventListener('DOMContentLoaded', function() {
     checkApiStatus();
+    initializeMLModelSelector();
     getFeatures();
     initializeModelSelector();
 });
 
-// 初始化模型选择器
+// 初始化机器学习模型选择器
+async function initializeMLModelSelector() {
+    try {
+        // 获取可用模型列表
+        const modelsResponse = await fetch(`${API_BASE}/models`);
+        const modelsData = await modelsResponse.json();
+        
+        // 获取当前模型信息
+        const currentModelResponse = await fetch(`${API_BASE}/current-model`);
+        const currentModelData = await currentModelResponse.json();
+        
+        // 更新当前模型显示
+        updateCurrentModelDisplay(currentModelData);
+        
+        // 填充模型选择器
+        populateModelSelector(modelsData.models, modelsData.current_model);
+        
+    } catch (error) {
+        console.error('初始化模型选择器失败:', error);
+        document.getElementById('current-model').textContent = '加载失败';
+        document.getElementById('model-selector').innerHTML = '<option value="">加载失败</option>';
+    }
+}
+
+// 更新当前模型显示
+function updateCurrentModelDisplay(modelData) {
+    const currentModelElement = document.getElementById('current-model');
+    currentModelElement.textContent = `${modelData.name} (${modelData.feature_count}个特征)`;
+    currentModelElement.title = modelData.description;
+}
+
+// 填充模型选择器
+function populateModelSelector(models, currentModelKey) {
+    const selector = document.getElementById('model-selector');
+    selector.innerHTML = '';
+    
+    models.forEach(model => {
+        const option = document.createElement('option');
+        option.value = model.key;
+        option.textContent = `${model.name} - ${model.description}`;
+        option.selected = model.key === currentModelKey;
+        
+        if (!model.is_available) {
+            option.disabled = true;
+            option.textContent += ' (不可用)';
+        }
+        
+        selector.appendChild(option);
+    });
+}
+
+// 切换模型
+async function switchModel() {
+    const selector = document.getElementById('model-selector');
+    const statusElement = document.getElementById('model-switch-status');
+    const selectedModelKey = selector.value;
+    
+    if (!selectedModelKey) {
+        return;
+    }
+    
+    // 显示加载状态
+    statusElement.textContent = '切换中...';
+    statusElement.className = 'status-message loading';
+    
+    try {
+        const response = await fetch(`${API_BASE}/switch-model`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ model_key: selectedModelKey })
+        });
+        
+        const data = await response.json();
+        
+        if (response.ok) {
+            // 切换成功
+            statusElement.textContent = '切换成功';
+            statusElement.className = 'status-message success';
+            
+            // 更新当前模型显示
+            const currentModelResponse = await fetch(`${API_BASE}/current-model`);
+            const currentModelData = await currentModelResponse.json();
+            updateCurrentModelDisplay(currentModelData);
+            
+            // 重新获取特征列表（因为不同模型可能有不同的特征）
+            await getFeatures();
+            
+            // 清空之前的结果
+            clearPreviousResults();
+            
+            // 3秒后隐藏状态消息
+            setTimeout(() => {
+                statusElement.textContent = '';
+                statusElement.className = 'status-message';
+            }, 3000);
+            
+        } else {
+            throw new Error(data.detail || '切换模型失败');
+        }
+        
+    } catch (error) {
+        console.error('切换模型失败:', error);
+        statusElement.textContent = '切换失败: ' + error.message;
+        statusElement.className = 'status-message error';
+        
+        // 恢复之前的选择
+        await initializeMLModelSelector();
+    }
+}
+
+// 清空之前的结果
+function clearPreviousResults() {
+    // 清空随机样本数据
+    const randomSampleData = document.getElementById('random-sample-data');
+    if (randomSampleData) {
+        randomSampleData.innerHTML = '';
+    }
+    
+    // 清空预测结果
+    const predictionResults = document.getElementById('prediction-results');
+    if (predictionResults) {
+        predictionResults.innerHTML = '';
+    }
+    
+    // 清空SHAP分析结果
+    const shapResults = document.getElementById('shap-results');
+    if (shapResults) {
+        shapResults.innerHTML = '';
+    }
+    
+    // 清空PDP结果
+    const pdpResults = document.getElementById('pdp-results');
+    if (pdpResults) {
+        pdpResults.innerHTML = '';
+    }
+}
+
+// 初始化LLM模型选择器（原有功能）
 function initializeModelSelector() {
     const modelSelect = document.getElementById('llm-model-select');
     const modelDescriptionText = document.getElementById('model-description-text');
@@ -884,6 +1024,7 @@ function displayPDPResults(data) {
                 <li><strong>绿色曲线:</strong> 部分依赖关系</li>
                 ${currentPDPSample ? '<li><strong>红色点:</strong> 当前样本的特征值位置</li>' : ''}
                 <li><strong>解释:</strong> 曲线显示了每个特征对模型预测结果的独立影响</li>
+                <li><strong>计算时间:</strong> ${data.calculation_time.toFixed(2)} 秒</li>
             </ul>
         </div>
     `;
