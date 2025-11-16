@@ -156,8 +156,8 @@ function initializeModelSelector() {
     if (modelSelect && modelDescriptionText) {
         // 模型描述映射
         const modelDescriptions = {
-            'gemini': 'Gemini 2.5 Flash: Google的快速响应模型，适合实时分析，支持流式输出',
-            'qwen': 'Qwen: 阿里云的中文优化模型，深度理解中文语境，支持流式输出'
+            'gemini': '使用Gemini 2.5 Flash，支持流式输出',
+            'qwen': 'Qwen，支持流式输出'
         };
         
         // 监听模型选择变化
@@ -526,7 +526,7 @@ async function getShapWithStatsAnalysis(sampleCount, features = null) {
         
         // 获取选择的模型
         const modelSelect = document.getElementById('llm-model-select');
-        const selectedModel = modelSelect ? modelSelect.value : 'gemini';
+        const selectedModel = modelSelect ? modelSelect.value : 'qwen';
         
         let requestBody;
         if (features) {

@@ -11,6 +11,9 @@ services:
       - ./models:/app/models  # 将宿主机的 models 文件夹挂载到容器的 /app/models 目录
       - ./static:/app/static  # 将宿主机的 static 文件夹挂载到容器的 /app/static 目录
       - ./src:/app/src  # 将宿主机的 src 文件夹挂载到容器的 /app/src 目录
+    # 从项目根目录的 .env 文件注入环境变量到容器
+    env_file:
+      - .env
     # 重启策略 ：除非手动停止，否则容器退出时自动重启
     restart: unless-stopped
     # 连接到 ml-network 网络

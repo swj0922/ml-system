@@ -2,6 +2,11 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 from google import genai
 from google.genai import types
+import os
+from dotenv import load_dotenv
+
+# 加载.env文件中的环境变量
+load_dotenv()
 
 
 class BaseLLM(ABC):
@@ -36,8 +41,8 @@ class BaseLLM(ABC):
         获取模型回复
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+            prompt (str)
+            system_prompt (str)
         
         Returns:
             str: 模型的回复内容
@@ -50,8 +55,8 @@ class BaseLLM(ABC):
         获取模型流式回复
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+            prompt (str)
+            system_prompt (str)
         
         Yields:
             str: 模型的流式回复内容片段
@@ -63,15 +68,15 @@ class GeminiLLM(BaseLLM):
     """
     Gemini模型实现类
     """
-    def __init__(self, api_key):
+    def __init__(self, api_key=None):
         """
         初始化Gemini模型
         
         Args:
-            api_key (str): Gemini API密钥
+            api_key (str, optional): API密钥，如果不提供将从环境变量获取
         """
         super().__init__(
-            api_key=api_key,
+            api_key=api_key or os.getenv("GEMINI_API_KEY"),
             base_url="https://generativelanguage.googleapis.com/v1beta/openai/"
         )
     
@@ -89,8 +94,8 @@ class GeminiLLM(BaseLLM):
         使用Gemini模型获取回复（非流式）
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+            prompt (str)
+            system_prompt (str)
         
         Returns:
             str: 模型的回复内容
@@ -113,14 +118,14 @@ class GeminiLLM(BaseLLM):
         使用Gemini模型获取流式回复
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
+            prompt (str)
+            system_prompt (str)
         
         Yields:
             str: 模型的流式回复内容片段
         """
         client = self.get_client()
-        
+        print(f"api_key: {self.api_key}")
         try:
             # 将系统提示和用户提示合并
             combined_prompt = f"{system_prompt}\n\n{prompt}"
@@ -147,19 +152,19 @@ class QwenLLM(BaseLLM):
     Qwen模型实现类
     """
     
-    def __init__(self, api_key, base_url=None):
+    def __init__(self, api_key=None, base_url=None):
         """
         初始化Qwen模型
         
         Args:
-            api_key (str): Qwen API密钥
-            base_url (str, optional): Qwen API基础URL，默认使用阿里云DashScope
+            api_key (str, optional): API密钥，如果不提供将从环境变量获取
+            base_url (str, optional): API基础URL
         """
         if base_url is None:
             base_url = "https://dashscope.aliyuncs.com/compatible-mode/v1"
         
         super().__init__(
-            api_key=api_key,
+            api_key=api_key or os.getenv("QWEN_API_KEY"),
             base_url=base_url
         )
     
@@ -180,13 +185,14 @@ class QwenLLM(BaseLLM):
         使用Qwen模型获取回复
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
-            model (str): 使用的Qwen模型，默认为"qwen-turbo"
+            prompt (str)
+            system_prompt (str)
+            model (str)
         
         Returns:
             str: 模型的回复内容
         """
+
         client = self.get_client()
         
         response = client.chat.completions.create(
@@ -196,7 +202,7 @@ class QwenLLM(BaseLLM):
                 {"role": "user", "content": prompt}
             ]
         )
-        
+
         return response.choices[0].message.content
     
     def get_streaming_response(self, prompt, system_prompt="You are a helpful assistant.", model="qwen-turbo"):
@@ -204,9 +210,9 @@ class QwenLLM(BaseLLM):
         使用Qwen模型获取流式回复
         
         Args:
-            prompt (str): 用户输入的提示
-            system_prompt (str): 系统提示，默认为"You are a helpful assistant."
-            model (str): 使用的Qwen模型，默认为"qwen-turbo"
+            prompt (str)
+            system_prompt (str)
+            model (str)
         
         Yields:
             str: 模型的流式回复内容片段
@@ -256,7 +262,8 @@ def create_llm(model_type, **kwargs):
 if __name__ == "__main__":
     # 使用Gemini模型
     gemini_llm = create_llm("gemini")
-    response = gemini_llm.get_streaming_response("Explain to me how AI works")
+    response = gemini_llm.get_response("Explain to me how AI works")
+    #response = gemini_llm.get_streaming_response("Explain to me how AI works")
     print("Gemini回复:", response)
     '''
     # 使用Qwen模型

@@ -35,3 +35,8 @@ requirements.lock
 # 临时文件
 *.tmp
 *.temp
+
+# 环境变量文件
+.env
+.env.local
+.env.*.local

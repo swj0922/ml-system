@@ -1144,7 +1144,7 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                 # 开始LLM流式解读
                 await websocket.send_text(json.dumps({
                     "type": "llm_start",
-                    "message": "开始LLM解读..."
+                    "message": "开始LLM解读...，往下滑查看解读结果"
                 }))
                 
                 # 获取选择的模型

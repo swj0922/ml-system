@@ -13,3 +13,4 @@ websockets
 google-genai
 matplotlib
 seaborn
+python-dotenv
