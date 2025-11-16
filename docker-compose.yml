@@ -1,15 +1,19 @@
 services:
   fastapi-app:
-    build: .
-    container_name: fastapi-app
+    build: .  # 指定 Docker Compose 应该在当前目录（ . 表示当前目录）中查找并使用 Dockerfile 来构建这个服务的容器镜像。
+    # 容器名称
+    container_name: fastapi-app # 由于项目目录名是ml，所以最终容器名是ml-fastapi-app
     ports:
-      - "8000:8000"
+      - "8000:8000"  # 将宿主机的 8000 端口映射到容器的 8000 端口
+    # 数据卷挂载
     volumes:
-      - ./data:/app/data
-      - ./models:/app/models
-      - ./static:/app/static
-      - ./src:/app/src
+      - ./data:/app/data  # 将宿主机的 data 文件夹挂载到容器的 /app/data 目录
+      - ./models:/app/models  # 将宿主机的 models 文件夹挂载到容器的 /app/models 目录
+      - ./static:/app/static  # 将宿主机的 static 文件夹挂载到容器的 /app/static 目录
+      - ./src:/app/src  # 将宿主机的 src 文件夹挂载到容器的 /app/src 目录
+    # 重启策略 ：除非手动停止，否则容器退出时自动重启
     restart: unless-stopped
+    # 连接到 ml-network 网络
     networks:
       - ml-network
 
@@ -19,8 +23,14 @@ services:
     ports:
       - "9090:9090"
     volumes:
+      # 类型：绑定挂载
+      # 宿主机路径：./docker/prometheus.yml
+      # 容器路径：/etc/prometheus/prometheus.yml
       - ./docker/prometheus.yml:/etc/prometheus/prometheus.yml
+      # 类型：命名卷挂载
+      # 容器路径：/prometheus
       - prometheus_data:/prometheus
+    # Prometheus 容器的启动命令配置
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.path=/prometheus'
@@ -29,6 +39,7 @@ services:
       - '--storage.tsdb.retention.time=200h'
       - '--web.enable-lifecycle'
     restart: unless-stopped
+    # 容器之间可以通过服务名直接访问（如 http://prometheus:9090 ）
     networks:
       - ml-network
 
@@ -55,9 +66,12 @@ services:
       - ml-network
 
 volumes:
+  # 定义一个名为 prometheus_data 的命名卷
+  # 在服务配置中已挂载到 - prometheus_data:/prometheus
+  # 确保 Prometheus 的监控数据在容器重启后不会丢失
   prometheus_data:
   grafana_data:
-
+# 创建一个名为ml-network的自定义网络，使得容器间可以通过服务名直接通信
 networks:
   ml-network:
     driver: bridge

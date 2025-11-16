@@ -63,10 +63,7 @@ class GeminiLLM(BaseLLM):
     """
     Gemini模型实现类
     """
-    # AIzaSyBCaevYiLbu8kE5VdPYZA8w8mUCWX9zwZA
-    # AIzaSyD36taFUaT7sv0iKwzLyuFeqZiZPoQtSnA
-    # AIzaSyB-AwMVI5PYGihROiUME3DOz7_lkk0Tovw
-    def __init__(self, api_key="AIzaSyB-AwMVI5PYGihROiUME3DOz7_lkk0Tovw"):
+    def __init__(self, api_key):
         """
         初始化Gemini模型
         
@@ -150,7 +147,7 @@ class QwenLLM(BaseLLM):
     Qwen模型实现类
     """
     
-    def __init__(self, api_key="sk-1ef165b563f646a482c2a0b589fa9b09", base_url=None):
+    def __init__(self, api_key, base_url=None):
         """
         初始化Qwen模型
         

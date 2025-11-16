@@ -31,7 +31,7 @@ from .partial_dependence import PartialDependenceAnalyzer
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """应用生命周期管理器"""
-    # 应用启动时加载模型和数据
+    # 应用启动时加载模型和数据（仅在启动时加载，有效避免每次请求都重新加载）
     success = load_model_and_data()
     if not success:
         print("模型和数据加载失败，应用将退出")
@@ -49,7 +49,7 @@ async def lifespan(app: FastAPI):
 # 创建FastAPI应用
 app = FastAPI(
     title="机器学习模型预测服务",
-    description="使用XGBoost模型进行预测并提供SHAP解释的API服务",
+    description="使用机器学习模型进行预测并提供SHAP解释的API服务",
     version="1.0.0",
     lifespan=lifespan
 )
@@ -605,7 +605,7 @@ async def predict(
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=error_msg)
-# todo
+
 @app.post("/shap-analysis", response_model=ShapAnalysisResponse)
 async def shap_analysis(
     request: ShapAnalysisRequest = Body(
@@ -910,9 +910,7 @@ def format_stats_for_llm(stats_bankrupt_0, stats_bankrupt_1, feature_names, top_
     - 格式化后的统计量文本
     """
     # 获取Bankrupt=0和Bankrupt=1的样本数
-    # 假设train_data在当前作用域可访问，或者通过参数传入
     # 为了简化，这里直接从stats_bankrupt_0/1中获取任意一个特征的统计量来推断样本数
-    # 实际应用中，建议直接传入样本数
     sample_count_0 = len(train_data[train_data['Bankrupt']==0])
     sample_count_1 = len(train_data[train_data['Bankrupt']==1])
 
@@ -980,7 +978,7 @@ def format_shap_for_llm(shap_values, feature_names, input_data):
     
     return formatted_text
 
-
+# 创建一个 实时双向通信 的 WebSocket 端点
 @app.websocket("/ws/shap-with-stats-analysis")
 async def websocket_shap_with_stats_analysis(websocket: WebSocket):
     """
@@ -991,12 +989,13 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
     try:
         while True:
             # 接收客户端请求
-            data = await websocket.receive_text()
-            request_data = json.loads(data)
+            data = await websocket.receive_text()  # 接收客户端文本消息
+            request_data = json.loads(data)  # 是一个字典，包含从WebSocket接收到的JSON数据
             
             # 验证请求数据格式
             try:
-                request = ShapAnalysisRequest(**request_data)
+                # 将request_data字典解包后创建ShapAnalysisRequest对象
+                request = ShapAnalysisRequest(**request_data)  
             except Exception as e:
                 await websocket.send_text(json.dumps({
                     "type": "error",
@@ -1005,6 +1004,7 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                 continue
             
             if model is None or explainer is None or test_data is None or train_data is None:
+                # 发送错误信息给客户端
                 await websocket.send_text(json.dumps({
                     "type": "error",
                     "message": "模型或数据未加载"
@@ -1049,8 +1049,8 @@ async def websocket_shap_with_stats_analysis(websocket: WebSocket):
                     "message": "计算SHAP值..."
                 }))
                 
-                # 使用异步执行避免阻塞事件循环
-                shap_values = await asyncio.to_thread(explainer.shap_values, input_data)
+                # 计算SHAP值
+                shap_values = explainer.shap_values(input_data)
                 base_value = explainer.expected_value
                 
                 if isinstance(base_value, (list, np.ndarray)):
